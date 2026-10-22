@@ -32,7 +32,12 @@ RULES = [
     },
     {
         "type": "pull_request",
-        "parameters": {"required_approving_review_count": 1, "require_code_owner_review": True},
+        "parameters": {
+            "required_approving_review_count": 1,
+            "require_code_owner_review": True,
+            "dismiss_stale_reviews_on_push": True,
+            "require_last_push_approval": True,
+        },
     },
     {"type": "non_fast_forward"},
     {"type": "deletion"},
@@ -75,7 +80,7 @@ def test_empty_repository_is_level_zero(tmp_path):
 def test_unknown_rules_never_count_as_pass(tmp_path):
     results = sc.evaluate(repo(tmp_path, ELITE, rules=None))
     unknown = {r.id for r in results if r.passed is None}
-    assert unknown == {"required-check", "reviews", "owner-review", "history"}
+    assert unknown == {"required-check", "reviews", "owner-review", "history", "fresh-review"}
     assert sc.level(results) == 2
 
 
@@ -454,3 +459,66 @@ def test_mentions_in_comments_satisfy_no_control(tmp_path):
 def test_provenance_from_a_real_step(tmp_path, step):
     r = repo(tmp_path, {".github/workflows/release.yml": "jobs:\n  r:\n    steps:\n" + step})
     assert sc.provenance(r)
+
+
+FRESH = {"dismiss_stale_reviews_on_push": True, "require_last_push_approval": True}
+FRESH_TITLE = "Approvals are dismissed on new pushes and the last pusher cannot self-approve"
+
+
+def pull_request(**params):
+    return [{"type": "pull_request", "parameters": params}]
+
+
+@pytest.mark.parametrize(
+    ("rules", "expected"),
+    [
+        (RULES, True),
+        (pull_request(**FRESH), True),
+        # Unrelated parameters neither help nor hurt.
+        (pull_request(**FRESH, required_approving_review_count=0), True),
+        # The pull_request rule is found among other rules.
+        ([{"type": "deletion"}, *pull_request(**FRESH), {"type": "non_fast_forward"}], True),
+        (pull_request(**{**FRESH, "dismiss_stale_reviews_on_push": False}), False),
+        (pull_request(**{**FRESH, "require_last_push_approval": False}), False),
+        (
+            pull_request(dismiss_stale_reviews_on_push=False, require_last_push_approval=False),
+            False,
+        ),
+        # A missing parameter is as bad as a false one (fail closed).
+        (pull_request(dismiss_stale_reviews_on_push=True), False),
+        (pull_request(require_last_push_approval=True), False),
+        (pull_request(), False),
+        # Only the literal `true` counts, not a truthy string or number.
+        (
+            pull_request(dismiss_stale_reviews_on_push="true", require_last_push_approval=True),
+            False,
+        ),
+        (pull_request(dismiss_stale_reviews_on_push=True, require_last_push_approval=1), False),
+        # The parameters of a rule with another type are not the pull_request rule's.
+        ([{"type": "required_status_checks", "parameters": FRESH}], False),
+        # No pull_request rule at all, or a rule without `parameters`.
+        ([{"type": "deletion"}, {"type": "non_fast_forward"}], False),
+        ([{"type": "pull_request"}], False),
+        ([{"type": "pull_request", "parameters": None}], False),
+        ([], False),
+        # Rules unavailable: unknown, never a pass.
+        (None, None),
+    ],
+)
+def test_fresh_review(tmp_path, rules, expected):
+    assert check(tmp_path, sc.fresh_review, {}, rules) is expected
+
+
+def test_fresh_review_is_a_level_four_control():
+    control = next(c for c in sc.CONTROLS if c.id == "fresh-review")
+    assert (control.level, control.title, control.check) == (4, FRESH_TITLE, sc.fresh_review)
+    assert len(sc.CONTROLS) == 18
+
+
+@pytest.mark.parametrize("parameter", sorted(FRESH))
+def test_a_stale_approval_rule_caps_the_level_at_three(tmp_path, parameter):
+    rules = [RULES[0], *pull_request(**{**RULES[1]["parameters"], parameter: False}), *RULES[2:]]
+    results = sc.evaluate(repo(tmp_path, ELITE, rules=rules))
+    assert [r.id for r in results if r.passed is not True] == ["fresh-review"]
+    assert sc.level(results) == 3
+    assert f"| L4 | {FRESH_TITLE} | ❌ |" in sc.render(results)

@@ -135,7 +135,7 @@ signal (89%).
 
 **Question:** is the repository set up so that the gates can't be bypassed?
 
-`golden scorecard` checks 17 controls in four cumulative levels and fails below
+`golden scorecard` checks 18 controls in four cumulative levels and fails below
 `scorecard.min_level` (default 2):
 
 | Level | Controls |
@@ -143,7 +143,7 @@ signal (89%).
 | **L1 Adopted** | CI on `pull_request` (not `pull_request_target`) · calls `golden.yml` · dependencies locked (lockfiles under `node_modules/`, `vendor/`, `.venv/` don't count) |
 | **L2 Owned** | CODEOWNERS · Dependabot/Renovate (any of its config locations) · SECURITY.md |
 | **L3 Enforced** | ruleset requires the `golden` check · ruleset requires an approval · **ruleset requires code-owner review, and CODEOWNERS owns `.github/workflows/` and the `golden.toml` in use** · force-push and deletion blocked · every action pinned to a SHA · every workflow's top-level `permissions:` is read-only (`write-all` or a top-level `write` scope fails; grant writes per job) · **no gate switched off in the caller** (`mutation: false` in any caller; `security` or `workflow-lint: false` in *every* caller, since one repository-wide scan is enough) · dependency cooldown configured |
-| **L4 Verified** | release artifacts carry signed provenance (an `actions/attest*` step or a `container.yml` call) · OpenSSF Scorecard runs (an `ossf/scorecard-action` step) · no active waivers |
+| **L4 Verified** | release artifacts carry signed provenance (an `actions/attest*` step or a `container.yml` call) · OpenSSF Scorecard runs (an `ossf/scorecard-action` step) · no active waivers · **the pull-request rule dismisses approvals on new pushes (`dismiss_stale_reviews_on_push`) and bars the last pusher from approving their own push (`require_last_push_approval`)** |
 
 Workflow files are read with YAML comments removed, and step-based controls look at `uses:`
 references, so a commented-out line or a mention in a `run:` script never satisfies a control.
@@ -159,6 +159,15 @@ requires a code owner's approval for `.github/workflows/` (or an organisation ru
 requires the workflow from a central repository) closes that path. `golden.toml` is different:
 the gates read it from the pull request's base commit, so a PR cannot loosen it for itself
 (see [configuration](configuration.md#a-change-never-grades-itself)).
+
+**Why fresh review is an L4 control.** Two-person review, a second person approving the *final*
+code, is the core of separation of duties, and a required approval alone doesn't deliver it:
+the author can collect an approval on a harmless first commit and then push the real change
+(`dismiss_stale_reviews_on_push` drops the approval), or push last and approve their own push
+(`require_last_push_approval` blocks that). Both parameters are read from the same
+`pull_request` rule as the approval count. The scorecard can't see **ruleset bypass actors**:
+GitHub returns `bypass_actors` only to a caller with write access to the ruleset, not to the
+`contents: read` token CI runs with, so review that list in the ruleset settings yourself.
 
 ## Security (nested workflow)
 
