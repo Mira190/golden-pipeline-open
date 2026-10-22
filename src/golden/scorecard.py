@@ -10,7 +10,8 @@ token is available; unknown never counts as a pass.
                  approve workflow and policy changes, history protected, every
                  action pinned, least-privilege tokens, no gate switched off in
                  the caller, dependency cooldown
-  L4 Verified  - signed provenance, OpenSSF Scorecard, no active waivers
+  L4 Verified  - signed provenance, OpenSSF Scorecard, no active waivers, a second
+                 person approves the final code (two-person review)
 
 Checks read workflow files with YAML comments removed, so a commented-out line
 never counts as a control.
@@ -256,6 +257,18 @@ def history_protected(repo: Repo) -> bool | None:
     return repo.rule("non_fast_forward") is not None and repo.rule("deletion") is not None
 
 
+def fresh_review(repo: Repo) -> bool | None:
+    """A second person approves the final code: a new push dismisses earlier approvals, and
+    whoever pushed last cannot approve their own push. A missing rule or parameter fails."""
+    if repo.rules is None:
+        return None
+    params = (repo.rule("pull_request") or {}).get("parameters") or {}
+    return (
+        params.get("dismiss_stale_reviews_on_push") is True
+        and params.get("require_last_push_approval") is True
+    )
+
+
 CONTROLS: tuple[Control, ...] = (
     Control("pr-ci", 1, "CI runs on pull requests", runs_on_prs),
     Control("golden", 1, "Calls a Golden Pipeline workflow", uses_golden),
@@ -286,6 +299,12 @@ CONTROLS: tuple[Control, ...] = (
     Control("provenance", 4, "Release artifacts carry signed provenance", provenance),
     Control("ossf", 4, "OpenSSF Scorecard runs", ossf_scorecard),
     Control("waivers", 4, "No active policy waivers", no_active_waivers),
+    Control(
+        "fresh-review",
+        4,
+        "Approvals are dismissed on new pushes and the last pusher cannot self-approve",
+        fresh_review,
+    ),
 )
 
 
