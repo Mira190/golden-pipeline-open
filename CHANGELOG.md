@@ -2,7 +2,21 @@
 
 ## Unreleased
 
+Weakening a test is gated:
+
+- Mutation testing now also mutates every source function that a changed or **removed** test
+  line names, in the source files that test references. A pull request that only drops
+  assertions, deletes a test case or deletes a whole test file used to change no source line,
+  so no gate had anything to check. Python (AST), TypeScript/JavaScript and Go (function
+  boundaries) are covered. `golden mutation` takes `--preset` to filter Stryker and gremlins
+  reports to the same scope; `golden.yml` and `golden local` pass it.
+
 A change never grades itself:
+
+- `golden plan` warns on every workflow, CODEOWNERS or `golden.toml` file the pull request
+  changes. GitHub runs the pull request's own copy of a workflow, so a code owner must review
+  it; docs/adoption.md now recommends an organisation ruleset that requires the pipeline from a
+  governance repository.
 
 - On pull requests and in the merge queue, every gate reads `golden.toml` **at the base commit**.
   The change may tighten the policy. Anything that loosens it applies only after merge, and is
