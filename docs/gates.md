@@ -184,29 +184,43 @@ GitHub returns `bypass_actors` only to a caller with write access to the ruleset
 | Check | Tool | Blocks on |
 |---|---|---|
 | Committed secrets | gitleaks 8.30.1 (digest-pinned image); PR range on PRs, full history on pushes | any finding |
-| Vulnerable dependencies | OSV-Scanner 2.7 over every lockfile in the project directory | any known vulnerability on default-branch pushes and the daily scheduled run; **report-only on PRs and in the merge queue** (see below) |
+| Vulnerable dependencies | OSV-Scanner 2.7 over every lockfile in the project directory | pull requests and the merge queue: a vulnerability the change introduces. Push, schedule and manual runs: any known vulnerability not excepted in `osv-scanner.toml` |
 | New dependencies in the PR | dependency-review-action | severity ≥ `high` (configurable); licences outside `allow-licenses` if set |
 | Workflow security | zizmor 1.30 (`regular` persona) | any finding (template injection, excessive permissions, unpinned actions, cache poisoning, …) |
 | Workflow correctness | actionlint 1.7.12 with shellcheck (digest-pinned image) | any finding (invalid expressions, unknown inputs, shell bugs in `run:`); input `workflow-lint` |
 | Go reachability | govulncheck 1.9 (in the Go lint step) | a reachable vulnerable symbol |
 
-**Who introduced the advisory decides who must act.** A PR is blocked for vulnerabilities it
-*adds*: dependency review is diff-aware. An advisory published today against a dependency the PR
-doesn't touch is reported on the PR but doesn't block it. Otherwise every open PR would go red
-at once, and people would learn to ask for bypasses. The default branch carries that debt
-instead: its push and daily scheduled runs block until someone upgrades the dependency or adds a
-time-boxed exception to `osv-scanner.toml`:
+### Vulnerable dependencies: what the change adds, then everything
 
-```toml
-[[IgnoredVulns]]
-id = "GHSA-xxxx-xxxx-xxxx"
-reason = "no upstream fix yet; not reachable from our code, PLAT-123"
-ignoreUntil = 2026-12-31   # required, at most 90 days ahead
-```
+A new advisory can land at any time. If every pull request failed on every known vulnerability,
+each advisory would turn unrelated PRs red with no code change, and people learn to bypass a gate
+that cries wolf. So the gate follows the practice of Google's OSV-Scanner action:
 
-`golden policy check` enforces the same rules as a waiver: an `id`, a `reason`, and an
-`ignoreUntil` at most 90 days ahead. It lists every exception in the job summary. After the date,
-OSV-Scanner enforces the advisory again. Protect `osv-scanner.toml` with CODEOWNERS.
+- **Pull requests and the merge queue** scan the base commit and the change, then diff the two.
+  Only a vulnerability present in the change and absent from the base blocks the merge. Each one
+  gets an error annotation on its lockfile.
+- **Pre-existing vulnerabilities are shown, not hidden.** The job summary lists them under
+  "Already present in the base (not blocking)", and one warning annotation gives the count.
+- **Push, schedule and manual runs** scan the checked-out commit and block on every known
+  vulnerability. This is where an advisory against code you already merged is caught, so
+  [run it on a schedule](configuration.md#securityyml) too.
+- **Exceptions are time-boxed** and live in `osv-scanner.toml` next to the lockfile, with a
+  `reason` and an `ignoreUntil` date: the same reason-plus-expiry model as a
+  [waiver](configuration.md#waivers), where `expires` is at most 90 days ahead. See
+  [`osv-scanner.toml`](configuration.md#osv-scannertoml) for the file and its limits.
+
+**Fails closed:** a scan that writes no results (OSV API unreachable), or a scan of the change
+that fails without reporting anything (an unparsable lockfile), is an error, never "no new
+vulnerabilities". A project that has no lockfiles in the base, because the change creates it, is
+not an error: everything in the change counts as new.
+
+**Fixing a failure:** upgrade the annotated package to the fixed version in the table. If the
+vulnerable code is genuinely not reachable, add an exception with a reason and a date, and expect
+the reviewer to question it.
+
+A scan step shown as failed with a green job is normal: osv-scanner exits 1 whenever it finds
+anything, including vulnerabilities that were already there. The "New vulnerabilities" step is the
+verdict.
 
 ## Change size (signal, not a gate)
 

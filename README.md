@@ -71,7 +71,7 @@ Coverage alone can be gamed (see the [drills](docs/evaluation.md#3-drills-does-e
   - every ecosystem gets a dependency cooldown
 
   See [security model](docs/security-model.md).
-- **Versioned as one unit.** The reusable workflow installs the `golden` CLI from the *same commit* you pinned, via `$/actions/setup`. A pinned SHA therefore freezes both the YAML and the gate logic.
+- **Versioned as one unit.** The reusable workflow installs the `golden` CLI from the *same commit* you pinned, via `$/actions/setup`. A pinned SHA therefore freezes the YAML, the gate logic and, through the commit's `uv.lock`, every dependency the gates run on.
 
 ## Policy as code
 

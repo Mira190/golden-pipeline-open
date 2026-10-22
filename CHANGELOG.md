@@ -17,13 +17,24 @@ Signals and hermeticity:
 - `scripts/drill.py` has a `forged-coverage` scenario: a conftest rewrites `coverage.xml`. Diff
   coverage is fooled by design, and the drill proves that mutation testing still blocks.
 
-Vulnerabilities are owned by whoever introduced them:
+Vulnerability gate, diff-aware (the Google OSV model):
 
-- OSV-Scanner is report-only on pull requests and in the merge queue, and blocking on
-  default-branch pushes and the new daily `schedule` run (templates, README, `ci.yml`). A PR is
-  still blocked for vulnerable dependencies it adds (dependency review).
-- `osv-scanner.toml` exceptions need an `id`, a `reason` and an `ignoreUntil` at most 90 days
-  ahead. `golden policy check` enforces this and lists the exceptions. CODEOWNERS covers the file.
+- On pull requests and in the merge queue, `security.yml` scans the base commit and the change and
+  blocks only on vulnerabilities **the change introduces** (`osv-reporter-action --old/--new`).
+  A newly published advisory no longer turns unrelated pull requests red; vulnerabilities already
+  in the base are listed in the job summary but don't block. Push, schedule and manual runs still
+  block on every known vulnerability, with time-boxed exceptions in `osv-scanner.toml`
+  (`ignoreUntil` + `reason`, the same model as waivers). Run the pipeline on a schedule so
+  advisories against merged code surface; see docs/configuration.md.
+- A scan that fails or writes no readable results fails the gate instead of reading as "no new
+  vulnerabilities". Results live under `.git/`, so a pull request cannot supply them.
+- A change never grades its own vulnerability exceptions: on pull requests and in the merge
+  queue, every `osv-scanner.toml` is read from the base commit, so a PR cannot except a
+  vulnerability it introduces. `golden policy check` enforces what OSV-Scanner leaves optional:
+  each `[[IgnoredVulns]]` entry needs an `id`, a `reason` and an `ignoreUntil` at most 90 days
+  ahead. The policy summary lists the exceptions, and CODEOWNERS covers `**/osv-scanner.toml`.
+- A daily `schedule` trigger in the templates, the README snippet and `ci.yml` runs the whole
+  pipeline on the default branch, so new advisories and flaky tests surface there first.
 
 Weakening a test is gated:
 

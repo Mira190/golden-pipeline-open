@@ -94,7 +94,8 @@ jobs:
           output-format: table
 
   # Release job: rebuilt from source with no cache restore, so nothing a pull
-  # request wrote into the Actions cache can reach a published artifact.
+  # request wrote into the Actions cache can reach a published artifact. The
+  # rebuilt digest is smoke-tested and scanned again before it is attested.
   publish:
     name: publish signed image
     needs: build
@@ -145,6 +146,24 @@ jobs:
           no-cache: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+      # The published image was rebuilt without cache (see above), so it is not
+      # byte-for-byte what the build job tested. Test what ships: smoke-test and
+      # scan the pushed digest *before* attesting it. A failure leaves the image
+      # unattested, so `gh attestation verify` (actions/verify-image) rejects it.
+      - name: Smoke test the published image
+        if: inputs.smoke-command != ''
+        env:
+          IMAGE: ${{ env.IMAGE }}@${{ steps.push.outputs.digest }}
+          CMD: ${{ inputs.smoke-command }}
+        run: bash -euo pipefail -c "$CMD"
+      - name: Vulnerability scan of the published image (grype)
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        with:
+          image: ${{ env.IMAGE }}@${{ steps.push.outputs.digest }}
+          fail-build: true
+          only-fixed: true
+          severity-cutoff: ${{ inputs.severity-cutoff }}
+          output-format: table
       - name: SBOM of the published image
         uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:

@@ -47,11 +47,17 @@ installs the CLI from its own checkout:
 - name: Install golden CLI
   env:
     GOLDEN_SRC: ${{ github.action_path }}/../..
-  run: uv tool install --python 3.13 "$GOLDEN_SRC"
+    UV_PROJECT_ENVIRONMENT: ${{ runner.temp }}/golden-cli
+  run: uv sync --project "$GOLDEN_SRC" --locked --no-dev --no-editable --python 3.13
 ```
 
 When a consumer pins `golden.yml@<sha>`, that one SHA freezes the YAML, the default commands
-(defined in `src/golden/plan.py`), the thresholds' floors and the gate algorithms. A Dependabot
+(defined in `src/golden/plan.py`), the thresholds' floors, the gate algorithms **and every
+dependency they run on**. The CLI is installed from that commit's `uv.lock` (hash-checked;
+`--locked` fails if the lock is stale), and the build backend is pinned through
+`build-constraint-dependencies`. `uv tool install` would re-resolve instead, and pick up a
+dependency release newer than the lock and its 7-day cooldown. Only the `golden` entry point is
+put on `PATH`, so the CLI's interpreter never shadows the project's. A Dependabot
 bump of that SHA upgrades all of them together and shows the whole diff in one PR.
 
 ## Where defaults live

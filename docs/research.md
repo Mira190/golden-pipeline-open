@@ -49,9 +49,16 @@ detection correlates with real-fault detection more strongly than statement cove
 - **"Practical Mutation Testing at Scale: A view from Google"** (Petrović, Ivanković, Fraser, Just;
   IEEE TSE 2021, arXiv 2102.11378):
   - Developers initially rated 85% of mutants unproductive.
-  - Suppressing *arid nodes* (logging, configuration and other code no test should pin down),
-    with at most one mutant per line, raised productive mutants from **15% to 89%**.
+  - Suppressing *arid nodes* (logging, configuration and other code no test should pin down)
+    raised productive mutants from about **15% to about 80%**; later refinements reached
+    **89%**. Separately, the system generates at most one mutant per line and caps mutants per
+    changelist (7× the number of files).
   - Used by more than 24,000 developers on more than 1,000 projects.
+  - Surviving mutants are *code-review findings*: an author need not resolve them before
+    submitting unless a reviewer marks them mandatory. This pipeline deliberately blocks on a
+    score instead, because a GitHub pull request has no "reviewer marks a finding mandatory"
+    step that a gate could enforce. The threshold is kept below 100% and waivable for that
+    reason.
 - **"Does mutation testing improve testing practices?"** (ICSE 2021, arXiv 2103.07189): developers
   shown mutants write more tests, and mutants were coupled to **70%** (1,043 of 1,502) of
   high-priority real bugs on the change that introduced them.
@@ -86,8 +93,11 @@ visible to reviewers.
 
 - **Google**
   - "Flaky Tests at Google and How We Mitigate Them" (J. Micco, Google Testing Blog, 2016):
-    about **1.5% of all test runs** are flaky, and **almost 16% of tests** show some flakiness.
-  - *SWE at Google*, ch. 11: as a suite approaches 1% flakiness, its tests "begin to lose value."
+    about **1.5% of all test runs** were flaky, and **almost 16% of tests** showed some
+    flakiness (2°, figures as of 2016).
+  - *SWE at Google* (2020), ch. 11: as a suite approaches 1% flakiness, its tests "begin to lose
+    value", and "at Google, our flaky rate hovers around **0.15%**". That is a tenth of the 2016
+    figure, after years of investment.
 - **Luo et al., "An empirical analysis of flaky tests"** (FSE 2014): the leading root causes are
   async wait (45%), concurrency (20%) and test-order dependency (12%). **78% of flaky tests are
   flaky when first written.**
@@ -114,8 +124,8 @@ mutant, missing test) and a markdown verdict in the job summary.
 ## 6. Keep the mainline green
 
 - **Uber SubmitQueue**, "Keeping Master Green at Scale" (Ananthanarayanan et al., EuroSys 2019):
-  without it, the iOS mainline was green only 52% of the time (2°). Speculative builds keep
-  master always green.
+  over one week without it, the iOS mainline was green only 52% of the time (§8.5). Speculative
+  builds keep master always green.
 - **Shopify Merge Queue v2** (2019): batched, speculative merges serving more than 1,000
   developers.
 - **Google TAP** (*SWE at Google*, ch. 23): a change that passes presubmit has a 95%+ chance of
@@ -166,8 +176,8 @@ rollout controller. Rollout itself is environment-specific and out of scope here
   - **Instability:** change fail rate and deployment rework rate. Rework rate was added in 2024.
 - The 2025 *State of AI-assisted Software Development* report (about 5,000 respondents) found that
   AI adoption now correlates with higher throughput but still with *lower* stability. Strong
-  version-control practice, small batches and quality internal platforms are among its seven "AI
-  capabilities".
+  version-control practice, small batches and quality internal platforms are among the
+  capabilities it associates with turning AI adoption into good outcomes.
 
 → **Design:** `golden dora` computes the delivery metrics from a deployment log, and the
 [evaluation guide](evaluation.md) pairs them with gate-effectiveness metrics.
@@ -190,7 +200,8 @@ rollout controller. Rollout itself is environment-specific and out of scope here
 Separation of duties is the oldest control in change management. The supply-chain frameworks
 restate it for CI:
 
-- **SLSA**'s source track requires two-person review of changes.
+- **SLSA** v1.2's source track requires two-party review at its highest level (Source L4).
+  Lower levels require controls and history, not a second reviewer.
 - **GitHub** offers organisation rulesets that *require a workflow* from a central repository, so
   a pull request cannot edit the check that judges it.
 
@@ -218,7 +229,7 @@ tools, one score definition, fail-closed handling and policy.
 
 | Concern | Prior art | Used here as | Notes |
 |---|---|---|---|
-| Diff coverage | [diff-cover](https://github.com/Bachmann1234/diff_cover); Codecov/Coveralls patch status; SonarQube "Clean as You Code" (80% on new code) | **reused**: diff-cover computes the number; `golden` adds fail-closed handling of unmeasured files and the policy floor | SonarQube ignores coverage on changes under 20 lines (its "fudge factor"). Not adopted, because a small change to billing code deserves a test too. |
+| Diff coverage | [diff-cover](https://github.com/Bachmann1234/diff_cover); Codecov/Coveralls patch status; SonarQube "Clean as You Code" (80% on new code) | **reused**: diff-cover computes the number; `golden` adds fail-closed handling of unmeasured files and the policy floor | SonarQube's Community Build ignores coverage on changes under 20 lines (its "fudge factor"). Not adopted, because a small change to billing code deserves a test too. |
 | Diff-scoped mutation | Google's diff-based mutation service; [cargo-mutants `--in-diff`](https://mutants.rs/in-diff.html); StrykerJS `--mutate file:lines` and `--incremental`; PIT with git integration | **adapted**: the same "mutants overlapping the diff" rule, implemented once for mutmut (functions), Stryker (line ranges) and gremlins (filtered report) | cargo-mutants warns that a diff-scoped run is no substitute for an occasional full run. Run a scheduled full mutation pass (for example weekly) to find tests weakened outside the diff. |
 | Mutation report format | [mutation-testing-elements](https://github.com/stryker-mutator/mutation-testing-elements) schema (StrykerJS, Stryker.NET, Stryker4s, muttest) | **reused**: `--format mutation-testing-elements` reads any compliant report | Makes the mutation gate usable for .NET and Scala without new code. |
 | "Did they add a test?" | [Danger](https://danger.systems) rules ("app files changed, no test files changed"), GitLab's Danger roulette | **adapted** into a blocking gate, with import resolution instead of "path contains `test`" | Danger rules warn; here the PR label is the escape hatch, and the evals check that gaming it (comments, unrelated tests) fails. |
@@ -243,5 +254,5 @@ tools, one score definition, fail-closed handling and policy.
 | 8 | Progressive, verifiable delivery; no exempt change types | Amazon; SRE Workbook; CrowdStrike RCA | `container.yml`, signed provenance |
 | 9 | Small batches, measured with DORA | DORA 2024/2025 | `golden dora`, evaluation guide |
 | 10 | One maintained paved road with supply-chain hardening | Spotify; 2025–26 incidents | reusable workflows, pinned, least privilege |
-| 11 | A change never grades itself | separation of duties; SLSA source track; required workflows | base-anchored `golden.toml`, scorecard `owner-review` and `gates-on` |
+| 11 | A change never grades itself | separation of duties; SLSA Source L4 two-party review; required workflows | base-anchored `golden.toml`, scorecard `owner-review`, `gates-on` and `fresh-review`, plan-time warning on self-modifying PRs |
 | 12 | Measure the gates' decisions, not just their code | drills; escaped-defect review | `evals/` decision benchmark, `scripts/drill.py` |
