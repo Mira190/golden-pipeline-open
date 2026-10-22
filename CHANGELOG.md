@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+Vulnerability gate, diff-aware (the Google OSV model):
+
+- On pull requests and in the merge queue, `security.yml` scans the base commit and the change and
+  blocks only on vulnerabilities **the change introduces** (`osv-reporter-action --old/--new`).
+  A newly published advisory no longer turns unrelated pull requests red; vulnerabilities already
+  in the base are listed in the job summary but don't block. Push, schedule and manual runs still
+  block on every known vulnerability, with time-boxed exceptions in `osv-scanner.toml`
+  (`ignoreUntil` + `reason`, the same model as waivers). Run the pipeline on a schedule so
+  advisories against merged code surface; see docs/configuration.md.
+- A scan that fails or writes no readable results fails the gate instead of reading as "no new
+  vulnerabilities". Results live under `.git/`, so a pull request cannot supply them.
+
 Weakening a test is gated:
 
 - Mutation testing now also mutates every source function that a changed or **removed** test
