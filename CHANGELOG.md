@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+Verify before you deploy (SLSA: consumers must be able to validate provenance):
+
+- New `actions/verify-image` composite action and `templates/deploy-verify.yml`. A deploy job
+  verifies, with `gh attestation verify`, that an image *digest* (tags are refused) carries SLSA
+  build provenance and an SBOM attestation signed by this repository's `container.yml` for the
+  expected repository, on a GitHub-hosted runner, before it deploys. There is no skip flag.
+- `container.yml` smoke-tests and scans the *published* digest before attesting it, so a
+  rebuilt image that fails is never attested. Attestations no longer create an artifact storage
+  record, which would need an `artifact-metadata: write` grant callers don't give.
+
 Vulnerability gate, diff-aware (the Google OSV model):
 
 - On pull requests and in the merge queue, `security.yml` scans the base commit and the change and
