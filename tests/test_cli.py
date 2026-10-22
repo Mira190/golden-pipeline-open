@@ -452,6 +452,23 @@ def test_scorecard_checks_ownership_of_the_policy_in_use(repo, capsys, monkeypat
     assert row in capsys.readouterr().out
 
 
+def test_scorecard_reads_tag_rulesets(repo, capsys, monkeypatch):
+    tags = [
+        {
+            "target": "tag",
+            "enforcement": "active",
+            "conditions": {"ref_name": {"include": ["~ALL"], "exclude": []}},
+            "rules": [{"type": "deletion"}, {"type": "non_fast_forward"}],
+        }
+    ]
+    monkeypatch.setattr(cli.sc, "tag_rulesets_from_env", lambda: tags)
+    cli.main(["scorecard", "--root", str(repo.root)])
+    assert "| L4 | Release tags can't be moved or deleted | ✅ |" in capsys.readouterr().out
+    monkeypatch.setattr(cli.sc, "tag_rulesets_from_env", lambda: None)
+    cli.main(["scorecard", "--root", str(repo.root)])
+    assert "| L4 | Release tags can't be moved or deleted | ❔ unknown |" in capsys.readouterr().out
+
+
 def test_dora_names_the_bad_line(repo, capsys):
     log = repo.root / "deploys.jsonl"
     log.write_text("{}\n")

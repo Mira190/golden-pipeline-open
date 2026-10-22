@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+Scorecard L4 gains three controls (21 in all):
+
+- `merge-queue`: the default branch's rules include a merge queue.
+- `code-scanning`: a `pull_request` workflow runs CodeQL or Semgrep, or a `code_scanning`
+  ruleset rule names at least one required tool.
+- `release-tags`: an active tag ruleset blocks deleting and moving `v*` tags. It is read
+  with `Metadata: read`, which every `GITHUB_TOKEN` has.
+
 Proof of alignment:
 
 - `docs/alignment.md` maps 35 published practices (Google, Meta, Uber, Shopify, Amazon, SLSA,

@@ -145,7 +145,7 @@ signal (89%).
 
 **Question:** is the repository set up so that the gates can't be bypassed?
 
-`golden scorecard` checks 18 controls in four cumulative levels and fails below
+`golden scorecard` checks 21 controls in four cumulative levels and fails below
 `scorecard.min_level` (default 2):
 
 | Level | Controls |
@@ -153,14 +153,17 @@ signal (89%).
 | **L1 Adopted** | CI on `pull_request` (not `pull_request_target`) · calls `golden.yml` · dependencies locked (lockfiles under `node_modules/`, `vendor/`, `.venv/` don't count) |
 | **L2 Owned** | CODEOWNERS · Dependabot/Renovate (any of its config locations) · SECURITY.md |
 | **L3 Enforced** | ruleset requires the `golden` check · ruleset requires an approval · **ruleset requires code-owner review, and CODEOWNERS owns `.github/workflows/` and the `golden.toml` in use** · force-push and deletion blocked · every action pinned to a SHA · every workflow's top-level `permissions:` is read-only (`write-all` or a top-level `write` scope fails; grant writes per job) · **no gate switched off in the caller** (`mutation: false` in any caller; `security` or `workflow-lint: false` in *every* caller, since one repository-wide scan is enough) · dependency cooldown configured |
-| **L4 Verified** | release artifacts carry signed provenance (an `actions/attest*` step or a `container.yml` call) · OpenSSF Scorecard runs (an `ossf/scorecard-action` step) · no active waivers · **the pull-request rule dismisses approvals on new pushes (`dismiss_stale_reviews_on_push`) and bars the last pusher from approving their own push (`require_last_push_approval`)** |
+| **L4 Verified** | release artifacts carry signed provenance (an `actions/attest*` step or a `container.yml` call) · OpenSSF Scorecard runs (an `ossf/scorecard-action` step) · no active waivers · **the pull-request rule dismisses approvals on new pushes (`dismiss_stale_reviews_on_push`) and bars the last pusher from approving their own push (`require_last_push_approval`)** · **a merge queue** (the default branch's rules include `merge_queue`) · **static analysis on pull requests** (a `pull_request` workflow runs `github/codeql-action/analyze`, a Semgrep action or a `semgrep` command, or the rules include a `code_scanning` rule naming at least one tool) · **release tags can't be moved or deleted** (one active tag ruleset with `deletion` plus `non_fast_forward` or `update` on `~ALL` or `refs/tags/v*`, with no exclusion that hits `v1.0.0`) |
 
 Workflow files are read with YAML comments removed, and step-based controls look at `uses:`
 references, so a commented-out line or a mention in a `run:` script never satisfies a control.
 
-The ruleset controls are read from the GitHub API (`GET /repos/{repo}/rules/branches/{branch}`,
-which works with `contents: read`). When the API isn't reachable they show **unknown**, and
-unknown never counts as a pass.
+The ruleset controls are read from the GitHub API: `GET /repos/{repo}/rules/branches/{branch}`
+for the branch rules, and `GET /repos/{repo}/rulesets?targets=tag&includes_parents=true` plus one
+`GET /repos/{repo}/rulesets/{id}` per tag ruleset (the list returns only summaries). Both need
+only `Metadata: read`, which every `contents: read` token has. When the API isn't reachable they
+show **unknown**, and unknown never counts as a pass. Static analysis is the exception: a
+workflow that runs it on pull requests counts without the API.
 
 **Why code-owner review is an L3 control.** On a `pull_request` event GitHub runs the
 workflow file *from the pull request*. A PR can therefore edit its own `ci.yml` to switch a gate
@@ -178,6 +181,25 @@ the author can collect an approval on a harmless first commit and then push the 
 `pull_request` rule as the approval count. The scorecard can't see **ruleset bypass actors**:
 GitHub returns `bypass_actors` only to a caller with write access to the ruleset, not to the
 `contents: read` token CI runs with, so review that list in the ruleset settings yourself.
+
+**Why a merge queue, static analysis and immutable tags are L4 controls.**
+
+- **Merge queue.** Required checks test a pull request against its base *as it was*. When
+  several pull requests merge close together, each can be green and the combination red. A merge
+  queue re-tests every pull request on top of the ones ahead of it. This is how Uber
+  ([SubmitQueue](https://www.masoud.io/docs/eurosys19.pdf)) and Shopify keep a busy trunk green.
+  GitHub offers merge queues only to organisation-owned public repositories and to private
+  repositories on GitHub Enterprise Cloud, so a personal repository stops at L3.
+- **Static analysis on the pull request.** Findings shown at review time get fixed; findings in
+  an offline list don't ([Tricorder](https://research.google/pubs/tricorder-building-a-program-analysis-ecosystem/),
+  [Infer](https://cacm.acm.org/research/scaling-static-analyses-at-facebook/)). CodeQL's default
+  setup has no workflow file, so use advanced setup or a `code_scanning` ruleset rule.
+- **Immutable release tags.** Consumers pin to tags, and provenance attests what a tag built. If
+  a tag can be moved, an attested artifact no longer matches its version. SLSA's source track
+  requires that tags "be prevented from being moved or deleted".
+
+As with the pull-request rule, bypass actors are invisible to a `contents: read` token, so review
+them in the ruleset settings.
 
 ## Security (nested workflow)
 
