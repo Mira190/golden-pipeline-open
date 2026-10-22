@@ -208,3 +208,106 @@ def test_cli_plan_reads_the_api_with_the_token(repo, monkeypatch, tmp_path, caps
     assert seen == ["tok"]
     out = capsys.readouterr().out
     assert json.loads(out[out.index("{") :])["presence-report-only"] == "true"
+
+
+# ------------------------------------------------------------- found by tests/test_fuzz.py
+# Fields that are not what GitHub sends prove nothing: no opt-out, never a traceback.
+def enforced(d):
+    return d == optout.Decision(report_only=False, note=d.note)
+
+
+@pytest.mark.parametrize(
+    "pr",
+    ["x", 5, ["labels"], None, True, {"labels": 5}, {"labels": "bug"}, {"labels": None}],
+)
+def test_a_pull_request_that_is_not_an_object_requests_nothing(pr):
+    assert decide({"pull_request": pr}, fetch_from([])) == optout.NOT_REQUESTED
+
+
+@pytest.mark.parametrize("name", [[], {}, None, 5, True, ["bug"]])
+def test_a_label_whose_name_is_not_text_is_not_a_label(name):
+    # An unhashable name used to be a TypeError in the set of names.
+    p = payload(labels=())
+    p["pull_request"]["labels"] = [{"name": name}, "bug", None, 5, {"other": LABEL}]
+    assert decide(p, fetch_from([])) == optout.NOT_REQUESTED
+
+
+@pytest.mark.parametrize("number", [None, "7", 7.0, float("inf"), True, [7], {}])
+def test_a_pull_request_number_that_is_not_a_whole_number_is_not_looked_up(number):
+    p = payload()
+    p["pull_request"]["number"] = number
+    fetch = fetch_from([events("bob")])
+    d = decide(p, fetch)
+    assert fetch.calls == ["/repos/o/r/issues/0/events?per_page=100&page=1"]
+    assert d.report_only  # the fake API answers whatever number it is asked about
+
+
+@pytest.mark.parametrize("user", ["alice", 5, ["alice"], None, {"login": ["alice"]}, {"login": ""}])
+def test_an_author_that_is_not_a_login_cannot_be_told_from_the_reviewer(user):
+    p = payload()
+    p["pull_request"]["user"] = user
+    d = decide(p, fetch_from([events("bob")]))
+    assert enforced(d)
+    assert "could not verify who applied it" in d.note
+
+
+@pytest.mark.parametrize("login", [["bob"], 5, True, {"name": "bob"}, "", None])
+def test_a_login_that_is_not_a_name_is_not_a_second_person(login):
+    # `{"login": ["bob"]}` counted as a reviewer other than the author: the opt-out was granted.
+    api = [{"event": "labeled", "label": {"name": LABEL}, "actor": {"login": login}}]
+    d = decide(payload(), fetch_from([api]))
+    assert enforced(d)
+    assert "could not verify who applied it" in d.note
+    assert optout.applier("o/r", 7, LABEL, fetch_from([api])) is None
+
+
+@pytest.mark.parametrize("sender", ["bob", 5, ["bob"], None, {"login": ["bob"]}, {"login": ""}])
+def test_a_sender_that_is_not_a_login_is_not_a_second_person(sender):
+    p = payload(label={"name": LABEL}, sender=sender)
+    d = decide(p, fetch_from([]))
+    assert enforced(d)
+    assert "could not verify who applied it" in d.note
+
+
+@pytest.mark.parametrize("label", ["bob", 5, ["name"], None, {"name": ["bob"]}])
+def test_an_event_label_that_is_not_an_object_names_nobody(label):
+    p = payload(label=label, sender={"login": "bob"})
+    api = fetch_from([events("carol")])
+    assert decide(p, api).note == f"label `{LABEL}` applied by @carol (PR by @alice)"
+
+
+def test_applier_skips_entries_that_are_not_labeled_events():
+    junk = [
+        "x",
+        5,
+        None,
+        {"event": "labeled", "label": "bob", "actor": {"login": "x"}},
+        {"event": "labeled", "label": ["name"], "actor": {"login": "dave"}},
+    ]
+    carol = {"event": "labeled", "label": {"name": LABEL}, "actor": {"login": "carol"}}
+    assert optout.applier("o/r", 7, LABEL, fetch_from([junk])) is None
+    assert optout.applier("o/r", 7, LABEL, fetch_from([[*junk, carol, *junk]])) == "carol"
+    # The latest application wins, even when it names nobody.
+    nobody = {"event": "labeled", "label": {"name": LABEL}, "actor": "x"}
+    assert optout.applier("o/r", 7, LABEL, fetch_from([[carol, nobody]])) is None
+
+
+def test_the_api_is_asked_about_the_number_of_the_pull_request():
+    fetch = fetch_from([events("bob")])
+    decide(payload(), fetch)
+    assert fetch.calls == ["/repos/o/r/issues/7/events?per_page=100&page=1"]
+
+
+def test_the_notes_say_why_an_opt_out_is_ignored():
+    unknown = decide(payload(), fetch_from([[]]))
+    assert unknown == optout.Decision(
+        report_only=False,
+        note=f"label `{LABEL}` ignored: could not verify who applied it, so test presence is "
+        "enforced (a time-boxed `[waivers.test-presence]` is the alternative)",
+    )
+    author = decide(payload(), fetch_from([events("alice")]))
+    assert author == optout.Decision(
+        report_only=False,
+        note=f"label `{LABEL}` ignored: the PR author (@alice) applied it; a reviewer must "
+        "apply it for test presence to become report-only",
+    )

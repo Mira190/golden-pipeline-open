@@ -265,7 +265,7 @@ def test_dora(repo, capsys):
 def test_summary_file(repo, monkeypatch, capsys):
     summary = repo.root / "summary.md"
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
-    (repo.root / "stats.json").write_text("{}")
+    (repo.root / "stats.json").write_text('{"killed": 0}')
     assert cli.main(["mutation", "stats.json", "--format", "mutmut"]) == 0
     assert "no mutants" in summary.read_text()
 
@@ -418,7 +418,14 @@ def test_unreadable_base_fails_closed(repo, monkeypatch, capsys):
     assert "cannot read the merged policy" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize(("content", "message"), [("{}", "is malformed"), ("[", "Expecting")])
+@pytest.mark.parametrize(
+    ("content", "message"),
+    [
+        ("{}", "is malformed"),
+        ("[", "Expecting"),
+        ('{"line_percent": -Infinity}', "is not a percentage"),  # every change would pass
+    ],
+)
 def test_ratchet_corrupt_baseline_exits_2(repo, capsys, content, message):
     cobertura(repo, {1, 2, 3})
     (repo.root / "base.json").write_text(content)
@@ -1250,3 +1257,59 @@ def test_a_waived_mutmut_failure_still_lists_the_survivors(repo, capsys):
     out = capsys.readouterr().out
     assert "Mutation testing: failed (waived)" in out
     assert out.count("::warning file=src/shop/pricing.py,line=") == 11
+
+
+# ------------------------------------------------------------- found by tests/test_fuzz.py
+def test_diff_coverage_with_a_preset_refuses_a_report_that_is_not_xml(repo, feature, capsys):
+    # measured_files raised ElementTree.ParseError, which main() did not map: a traceback.
+    (repo.root / "coverage.xml").write_text("not xml")
+    args = ["diff-coverage", "--base", feature, "--preset", "python", "coverage.xml"]
+    assert cli.main(args) == 2
+    assert "::error::golden diff-coverage: unreadable Cobertura report" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("fmt", "report"),
+    [
+        ("mutmut", "{}"),  # no counts at all
+        ("mutmut", '{"killed": -3, "survived": 1}'),
+        ("mutmut", '{"killed": "9", "survived": 1}'),
+        ("stryker", "{}"),  # no `files`: not a report with no mutants
+        ("stryker", '{"files": {"a.ts": {}}}'),
+        ("gremlins", "{}"),
+        ("gremlins", '{"files": [{"file_name": "a.go"}]}'),
+        ("stryker", ""),
+        pytest.param("mutmut", "[" * 100_000 + "]" * 100_000, id="mutmut-deeply-nested"),
+    ],
+)
+def test_a_mutation_report_that_is_no_report_does_not_pass(repo, capsys, fmt, report):
+    (repo.root / "report.json").write_text(report)
+    assert cli.main(["mutation", "report.json", "--format", fmt]) == 2
+    assert (
+        capsys.readouterr()
+        .out.rstrip("\n")
+        .split("\n")[-1]
+        .startswith("::error::golden mutation: ")
+    )
+
+
+@pytest.mark.parametrize(
+    "inputs",
+    ["null", "[]", '"x"', "7", "{", pytest.param("[" * 100_000, id="deeply-nested")],
+)
+def test_workflow_inputs_that_are_not_a_json_object_exit_2(repo, monkeypatch, capsys, inputs):
+    monkeypatch.setenv("GOLDEN_INPUTS", inputs)
+    assert cli.main(["plan", "--language", "python"]) == 2
+    assert "::error::golden plan: GOLDEN_INPUTS is not" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "payload",
+    ["", "[]", "null", "{", "\xff", pytest.param("[" * 100_000, id="deeply-nested")],
+)
+def test_an_event_file_that_is_no_json_object_exits_2(repo, monkeypatch, capsys, payload):
+    (repo.root / "event.json").write_text(payload, encoding="latin-1")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", "event.json")
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
+    assert cli.main(["plan", "--language", "python"]) == 2
+    assert "::error::golden plan: the event payload event.json is not" in capsys.readouterr().out

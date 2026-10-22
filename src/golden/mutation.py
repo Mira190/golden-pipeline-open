@@ -145,19 +145,43 @@ def _relative(name: str, project_root: str | None = None) -> str:
     return name
 
 
+def _line(value: object) -> int:
+    """A mutant's line: a whole number from 1. A string, a float or 0 is not a line, and a
+    mutant that is not on a line would be dropped when the report is narrowed to a change."""
+    if type(value) is not int or value < 1:
+        raise ValueError(f"{value!r} is not a line number")
+    return value
+
+
+def _status(value: object, known: dict[str, str]) -> str:
+    """The normalised status. A status the tool has but that carries no verdict (a compile
+    error) is OTHER; one that is not even a string would drop a survivor from the score."""
+    if not isinstance(value, str):
+        raise ValueError(f"mutant status {value!r} is not a string")
+    return known.get(value, OTHER)
+
+
+def _mutator(mutant: dict[str, Any], key: str) -> str:
+    value = mutant.get(key, "")
+    if not isinstance(value, str):
+        raise ValueError(f"{key} {value!r} is not a string")
+    return value
+
+
 def _elements(data: dict[str, Any]) -> list[Mutant]:
     # mutation-testing-report-schema (StrykerJS, Stryker.NET, Stryker4s, ...):
-    # files.<path>.mutants[]
+    # files.<path>.mutants[]. `files` and `mutants` are required there: a report without them
+    # is not a report with no mutants (a renamed key must not read as a clean run).
     root = data.get("projectRoot")
     return [
         Mutant(
             _relative(name, root),
-            int(m["location"]["start"]["line"]),
-            STRYKER.get(m["status"], OTHER),
-            m.get("mutatorName", ""),
+            _line(m["location"]["start"]["line"]),
+            _status(m["status"], STRYKER),
+            _mutator(m, "mutatorName"),
         )
-        for name, f in data.get("files", {}).items()
-        for m in f.get("mutants", [])
+        for name, f in data["files"].items()
+        for m in f["mutants"]
     ]
 
 
@@ -165,28 +189,54 @@ def _gremlins(data: dict[str, Any]) -> list[Mutant]:
     return [
         Mutant(
             _relative(f["file_name"]),
-            int(m["line"]),
-            GREMLINS.get(m["status"], OTHER),
-            m.get("type", ""),
+            _line(m["line"]),
+            _status(m["status"], GREMLINS),
+            _mutator(m, "type"),
         )
-        for f in data.get("files", [])
-        for m in f.get("mutations", [])
+        for f in data["files"]
+        for m in f["mutations"]
     ]
+
+
+# The numbers of `mutmut export-cicd-stats` the score is made of (`total` and `skipped` are not).
+MUTMUT_COUNTS = (
+    "killed",
+    "survived",
+    "no_tests",
+    "timeout",
+    "suspicious",
+    "segfault",
+    "check_was_interrupted_by_user",
+)
+
+
+def _counts(data: dict[str, Any]) -> dict[str, int]:
+    """The score's numbers. A count must be a whole number from 0: a string, a float or a
+    negative number would read as a better score. Every release that writes this file writes
+    all of them, so a file with none of them is not mutmut's, and an empty object is no report."""
+    if not any(key in data for key in MUTMUT_COUNTS):
+        raise ValueError("none of mutmut's counts is in the report")
+    counts = {}
+    for key in MUTMUT_COUNTS:
+        value = data.get(key, 0)
+        if type(value) is not int or value < 0:
+            raise ValueError(f"{key} is {value!r}, not a count")
+        counts[key] = value
+    return counts
 
 
 def _mutmut(data: dict[str, Any]) -> Tally:
     # `mutmut export-cicd-stats` aggregates; suspicious/segfault behave like timeouts.
     # Fails closed like a missing report: an interrupted run proves nothing about the
     # mutants it never finished. (`total` cannot tell, it counts unselected mutants too.)
-    if int(data.get("check_was_interrupted_by_user", 0)):
+    counts = _counts(data)
+    if counts["check_was_interrupted_by_user"]:
         raise ValueError("mutmut run was interrupted; the mutation report is incomplete")
     return Tally(
-        killed=int(data.get("killed", 0)),
-        timeout=int(data.get("timeout", 0))
-        + int(data.get("suspicious", 0))
-        + int(data.get("segfault", 0)),
-        survived=int(data.get("survived", 0)),
-        no_coverage=int(data.get("no_tests", 0)),
+        killed=counts["killed"],
+        timeout=counts["timeout"] + counts["suspicious"] + counts["segfault"],
+        survived=counts["survived"],
+        no_coverage=counts["no_tests"],
     )
 
 
@@ -224,7 +274,9 @@ def _defs(path: Path) -> dict[tuple[str, str], _Def]:
         return {}
     try:
         tree = ast.parse("\n".join(lines))
-    except (SyntaxError, ValueError):
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
+        # Not Python, or nested so deeply (`1+1+...+1`, `----...1`) that the parser runs out of
+        # stack or memory: the survivors of this file are named, not placed.
         return {}
     kinds = (ast.FunctionDef, ast.AsyncFunctionDef)
     scopes = [("", tree.body)]
@@ -284,7 +336,7 @@ def _exit_codes(meta: Path) -> dict[str, int | None] | None:
     """`exit_code_by_key` of a mutmut .meta file; None when it is not what mutmut writes."""
     try:
         codes = json.loads(meta.read_text(encoding="utf-8"))["exit_code_by_key"]
-    except (OSError, ValueError, KeyError, TypeError):
+    except (OSError, ValueError, KeyError, TypeError, RecursionError):
         return None
     if not isinstance(codes, dict) or not all(c is None or type(c) is int for c in codes.values()):
         return None
@@ -357,7 +409,11 @@ def _load(path: Path) -> dict[str, Any]:
     """Fails closed: a missing report means the mutation tool did not run."""
     if not path.exists():
         raise FileNotFoundError(f"mutation report {path} not found; did the mutation tool run?")
-    data: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        data: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, RecursionError) as exc:
+        # ValueError: not JSON, or not UTF-8; RecursionError: nested a few thousand levels deep.
+        raise ValueError(f"mutation report {path} is not valid JSON: {exc}") from exc
     return data
 
 
@@ -374,7 +430,9 @@ def in_ranges(mutant: Mutant, lines: dict[str, list[Range]]) -> bool:
 # logic (`return x || console.log(y)`, `if (a) console.log(b)`, `log(a); b()`), and
 # never matches a call whose arguments have side effects (see `_pure_args`).
 # What is not matched stays mutated: multi-line calls, trailing comments, `await log()`.
-_CALL = r"\((?P<args>.*)\)\s*;?\s*$"
+# The line is stripped before matching, so the end needs no `\s*` of its own: two runs of `\s*`
+# around an optional `;` are quadratic on a long run of spaces (30,000 of them take 20 seconds).
+_CALL = r"\((?P<args>.*)\)\s*;?$"
 
 JS_ARID = (
     # console.*: output for humans; no test should assert on it.
@@ -422,6 +480,7 @@ def _pure_args(args: str) -> bool:
 
 def is_arid_line(line: str, patterns: tuple[re.Pattern[str], ...]) -> bool:
     """The source line is a single logging/debug call, and nothing else."""
+    line = line.rstrip()
     for pattern in patterns:
         found = pattern.match(line)
         if found and _pure_args(found["args"]):

@@ -20,12 +20,40 @@ layers. Each layer catches a class of defect the others miss:
 |---|---|---|---|
 | Static | Is the code well-formed, typed, and are the workflows safe? | ruff, mypy `--strict`, actionlint + shellcheck, zizmor, CodeQL, OpenSSF Scorecard | every PR |
 | Unit and property tests | Does each function do what it says, for every input and not just the examples? | pytest (random order, xdist), branch coverage ≥ 99%; Hypothesis properties in `tests/test_properties.py` for the invariants safety rests on (merged policy never looser than the base, no output or annotation injection, changed lines match git), 2,000 examples each with `HYPOTHESIS_PROFILE=ci` | every PR |
+| Fuzzing | Does every parser fail closed on any input, not just the malformed ones someone thought of? | Hypothesis in `tests/test_fuzz.py`, two layers per parser: structure-aware damage (fields deleted, nulled, retyped, nested 70,000 deep, truncated, re-encoded) and raw bytes. It asserts that the result is well formed or the documented error is raised, that nothing hangs, and that damage never improves a verdict | every PR at 40 examples per test; nightly (`fuzz.yml`) at 20,000 |
 | Test adequacy | Would those tests notice a bug in the gate code? | mutmut on changed functions, ≥ 80% | every PR |
 | **Decision benchmark** | Does each gate make the right merge decision on legitimate, gaming and malformed pull requests? | [`evals/`](../evals/README.md): 96 labelled pull requests run through the real CLI, scored as escapes, false blocks, robustness failures and crashes | every PR (`tests/test_evals.py`) |
 | End-to-end drills | Do the gates catch a weak test with the real toolchains, and did a tool upgrade change its contract? | `scripts/drill.py` (pytest/mutmut, Vitest/Stryker, go test/gremlins) | every PR |
 | Shadow runs (recommended) | How often would the gates block real, reviewed changes? | `golden local` or the workflow in report-only mode over a few hundred merged PRs of an adopting repository; the false-block rate in §2.1 | before raising `min_level` or tightening floors |
 | Real-fault replay | Do the gates catch real bugs, not just synthetic mutants? | [`evals/realfaults/`](../evals/realfaults/README.md): real bug fixes from open-source Python libraries, run at the fix's parent with the tests of that day. Grow it with BugsInPy or Defects4J-style pairs and report confidence intervals | on demand; quarterly as it grows |
 | Outcomes | Is delivery faster *and* more stable? | `golden dora`, Actions API | monthly |
+
+**Fuzzing the gate parsers.**
+
+- **What is fuzzed:** every parser that reads an input a pull request or a tool can shape.
+  - Coverage reports and the ratchet baseline.
+  - Mutation reports (mutmut, Stryker, gremlins) and mutmut's per-mutant results.
+  - SARIF, JUnit and `go test -json`.
+  - `golden.toml` and `osv-scanner.toml`.
+  - The deployment log.
+  - The GitHub event and the workflow inputs.
+- **The contract the tests check:**
+  - The result is well formed, or the error is exactly the documented `ValueError` or
+    `PolicyError`, with a readable message.
+  - Nothing hangs.
+  - Damage never improves a verdict: a damaged count never raises a score, a damaged SARIF
+    result never loses a finding, a damaged event never grants the test-presence opt-out, and a
+    garbage baseline never passes the ratchet.
+- **What the first long run found:** 2.45 million examples turned up about 40 crashes and
+  fail-open readings across nine parsers. Among them:
+  - An empty mutation report passed as "no mutants".
+  - A `-Infinity` coverage baseline let every change through the ratchet.
+  - A login sent as a list counted as a second person for the opt-out label.
+  - A null SARIF level downgraded an error.
+  - A regex took 20 s on one long line.
+- **Regressions:** each finding has a minimal regression test next to the parser's own tests.
+- **How to run it:** `HYPOTHESIS_PROFILE=fuzz uv run pytest tests/test_fuzz.py -n auto` runs
+  the long profile locally.
 
 The decision benchmark and the drills complement each other. The benchmark is fast (about 20 s),
 needs only git and Python, and covers breadth: 10 gates, adversarial inputs, policy edge cases.

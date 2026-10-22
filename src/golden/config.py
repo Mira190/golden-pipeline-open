@@ -120,16 +120,25 @@ def _parse_waivers(raw: dict[str, Any], today: dt.date) -> dict[str, Waiver]:
         unknown = set(spec) - {"reason", "expires"}
         if unknown:
             raise PolicyError(f"waiver for {gate}: unknown key(s) {', '.join(sorted(unknown))}")
-        reason = str(spec.get("reason", "")).strip()
+        reason = spec.get("reason")
         expires = spec.get("expires")
-        if not reason:
+        if not isinstance(reason, str) or not reason.strip():
             raise PolicyError(f"waiver for {gate} needs a reason")
         if not isinstance(expires, dt.date) or isinstance(expires, dt.datetime):
             raise PolicyError(f"waiver for {gate} needs `expires = YYYY-MM-DD`")
         if (expires - today).days > MAX_WAIVER_DAYS:
             raise PolicyError(f"waiver for {gate} may last at most {MAX_WAIVER_DAYS} days")
-        waivers[gate] = Waiver(gate, reason, expires)
+        waivers[gate] = Waiver(gate, reason.strip(), expires)
     return waivers
+
+
+def _number(key: str, value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise PolicyError(f"{key} must be a number")
+    try:
+        return float(value)
+    except OverflowError as exc:  # an integer of more than 308 digits
+        raise PolicyError(f"{key} is too large to be a number") from exc
 
 
 def from_mapping(data: dict[str, Any], today: dt.date | None = None) -> Policy:
@@ -148,11 +157,8 @@ def from_mapping(data: dict[str, Any], today: dt.date | None = None) -> Policy:
     values: dict[str, float] = {}
     for key, bound in BOUNDS.items():
         section, name = key.split(".")
-        value = data.get(section, {}).get(name, bound.default)
-        if isinstance(value, bool) or not isinstance(value, int | float):
-            raise PolicyError(f"{key} must be a number")
-        bound.check(key, float(value))
-        values[key] = float(value)
+        values[key] = _number(key, data.get(section, {}).get(name, bound.default))
+        bound.check(key, values[key])
 
     exempt = data.get("presence", {}).get("exempt", [])
     if not isinstance(exempt, list) or not all(isinstance(e, str) for e in exempt):
@@ -171,9 +177,20 @@ def _parse(text: str | None, origin: str, today: dt.date | None) -> Policy:
         return from_mapping({}, today)
     try:
         data = tomllib.loads(text)
-    except tomllib.TOMLDecodeError as exc:
+    except (ValueError, RecursionError) as exc:
+        # TOMLDecodeError, an integer of more than 4300 digits, or arrays nested too deeply.
         raise PolicyError(f"{origin}: {exc}") from exc
     return from_mapping(data, today)
+
+
+def _read(path: Path) -> str | None:
+    """The policy file's text; None if there is no file (all defaults)."""
+    if not path.exists():
+        return None
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise PolicyError(f"{path}: not UTF-8 text: {exc}") from exc
 
 
 def read_at(base: str, path: Path) -> str | None:
@@ -215,7 +232,7 @@ def merge(base: Policy, head: Policy) -> Policy:
 def load(path: Path | None = None, today: dt.date | None = None, base: str = "") -> Policy:
     """Load `golden.toml` (missing = all defaults), anchored to commit `base` if given."""
     path = path or Path("golden.toml")
-    head = _parse(path.read_text(encoding="utf-8") if path.exists() else None, str(path), today)
+    head = _parse(_read(path), str(path), today)
     if not base:
         return head
     text = read_at(base, path)

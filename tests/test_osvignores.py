@@ -88,3 +88,52 @@ def test_policy_check_fails_on_a_permanent_exception(repo, capsys):
     write(repo.root, "osv-scanner.toml", entry(ignoreUntil=None))
     assert cli.main(["policy", "check"]) == 2
     assert "ignoreUntil is required" in capsys.readouterr().out
+
+
+# ------------------------------------------------------------- found by tests/test_fuzz.py
+@pytest.mark.parametrize(
+    "content",
+    [
+        pytest.param("a = " + "[" * 5000 + "]" * 5000, id="deeply-nested"),
+        pytest.param("[[IgnoredVulns]]\nid = " + "9" * 5000 + "\n", id="a-huge-integer"),
+    ],
+)
+def test_a_file_the_toml_reader_gives_up_on_is_a_policy_error(tmp_path, content):
+    write(tmp_path, "osv-scanner.toml", content)
+    with pytest.raises(config.PolicyError, match=r"^osv-scanner\.toml: ") as raised:
+        osvignores.check(tmp_path, TODAY)
+    assert type(raised.value) is config.PolicyError
+
+
+@pytest.mark.parametrize("content", [b"\xff\xfe", b"[[IgnoredVulns]]\n\x80", b"\xef\xbb\xbf\xff"])
+def test_a_file_that_is_not_utf8_is_a_policy_error(tmp_path, content):
+    (tmp_path / "svc").mkdir()
+    (tmp_path / "svc" / "osv-scanner.toml").write_bytes(content)
+    with pytest.raises(config.PolicyError, match=r"^svc/osv-scanner\.toml: ") as raised:
+        osvignores.check(tmp_path, TODAY)
+    assert type(raised.value) is config.PolicyError
+
+
+@pytest.mark.parametrize(
+    "value", ["5", "true", '["GHSA-1"]', "{a = 1}", '""', '"  "', "2026-12-01"]
+)
+def test_an_advisory_id_that_is_not_text_is_not_an_id(tmp_path, value):
+    # str() of a list or a number used to pass for an id.
+    write(tmp_path, "osv-scanner.toml", entry(id=value))
+    with pytest.raises(config.PolicyError, match=r"IgnoredVulns\[0\]: id is required"):
+        osvignores.check(tmp_path, TODAY)
+
+
+@pytest.mark.parametrize(
+    "value", ["5", "true", '["no fix"]', "{a = 1}", '""', '"  "', "2026-12-01"]
+)
+def test_a_reason_that_is_not_text_is_not_a_reason(tmp_path, value):
+    write(tmp_path, "osv-scanner.toml", entry(reason=value))
+    with pytest.raises(config.PolicyError, match=r"\(GHSA-1\): reason is required"):
+        osvignores.check(tmp_path, TODAY)
+
+
+def test_the_id_and_the_reason_are_kept_as_written_apart_from_padding(tmp_path):
+    write(tmp_path, "osv-scanner.toml", entry(id='"  GHSA-1"', reason='"  no fix \\n"'))
+    (found,) = osvignores.check(tmp_path, TODAY)
+    assert (found.id, found.reason) == ("  GHSA-1", "no fix")

@@ -7,7 +7,8 @@ Each property is a promise the pipeline makes to the people it gates:
 - no file name or message can break out of a workflow-command annotation;
 - the changed lines git reports are exactly what changed, in HEAD's numbering.
 
-Run more examples with `HYPOTHESIS_PROFILE=ci uv run pytest tests/test_properties.py`.
+Run more examples with `HYPOTHESIS_PROFILE=ci uv run pytest tests/test_properties.py`; the
+nightly `fuzz.yml` does.
 """
 
 import contextlib
@@ -26,8 +27,10 @@ from hypothesis import strategies as st
 
 from golden import config, gitdiff, plan, report
 
-settings.register_profile("ci", max_examples=2000, deadline=None)
-settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "default"))
+# Applied to each property below, not loaded globally, so other test modules keep their own
+# settings. `ci` or `fuzz` in HYPOTHESIS_PROFILE asks for the long run.
+LONG = os.environ.get("HYPOTHESIS_PROFILE") in {"ci", "fuzz"}
+PROPERTY = settings(max_examples=2000, deadline=None) if LONG else settings()
 
 ROOT = Path(__file__).resolve().parent.parent
 _spec = importlib.util.spec_from_file_location("properties_runner", ROOT / "evals" / "runner.py")
@@ -63,6 +66,7 @@ policies = st.builds(
 )
 
 
+@PROPERTY
 @given(policies, policies)
 def test_merge_never_loosens_the_base_and_announces_what_it_defers(base, head):
     merged = config.merge(base, head)
@@ -84,6 +88,7 @@ def test_merge_never_loosens_the_base_and_announces_what_it_defers(base, head):
         assert f"waiver for {gate} applies after merge" in merged.deferred
 
 
+@PROPERTY
 @given(policies)
 def test_merging_a_policy_with_itself_changes_nothing(policy):
     merged = config.merge(policy, policy)
@@ -103,6 +108,7 @@ def _github_lines(text: str) -> list[str]:
 keys = st.from_regex(r"[a-z][a-z-]{0,20}", fullmatch=True)
 
 
+@PROPERTY
 @given(st.dictionaries(keys, st.text()))
 def test_job_outputs_round_trip_and_no_value_adds_a_key(outputs):
     with tempfile.TemporaryDirectory() as tmp:
@@ -138,6 +144,7 @@ def _unescape(value: str) -> str:
     return re.sub(r"%(25|0D|0A|3A|2C)", lambda m: bytes.fromhex(m[1]).decode(), value)
 
 
+@PROPERTY
 @given(st.text(min_size=1), st.text(), st.integers(1, 10**6))
 def test_annotations_stay_one_command_and_carry_the_exact_text(file, message, line):
     with contextlib.redirect_stdout(buffer := io.StringIO()):
@@ -165,7 +172,9 @@ def _git(cwd: Path, *args: str) -> str:
     ).stdout.strip()
 
 
-@settings(max_examples=40, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@settings(
+    max_examples=400 if LONG else 40, deadline=None, suppress_health_check=[HealthCheck.too_slow]
+)
 @given(lines_of_text, lines_of_text)
 def test_changed_lines_are_exactly_the_lines_head_did_not_keep(before, after):
     with tempfile.TemporaryDirectory() as tmp:

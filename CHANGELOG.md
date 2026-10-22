@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+Fuzzing the gate parsers:
+
+- `tests/test_fuzz.py` fuzzes every parser that reads an input a pull request or a tool can shape,
+  with Hypothesis. It runs 40 examples per test on every PR and 20,000 nightly in `fuzz.yml`. The
+  contract: a well-formed result or the documented error, no hang, and damage never improves a
+  verdict.
+- The first long run found about 40 crashes and fail-open readings, all fixed:
+  - Mutation reports: `{}` read as "no mutants", null or numeric statuses dropped survivors, and
+    string or negative counts read as a better score.
+  - Coverage: a `-Infinity` or out-of-range baseline passed the ratchet, and totals could exceed
+    100%.
+  - SARIF: a null `level` downgraded an error, and an unknown `kind` dropped the finding.
+  - Events and inputs: an empty or non-string base sha skipped every gate, and a login sent as a
+    list or number granted the opt-out.
+  - Everywhere: deep nesting, huge numbers and non-UTF-8 input raised tracebacks.
+  - The arid-line regex was quadratic.
+- Stricter inputs:
+  - A mutmut stats file needs at least one of its counts.
+  - Stryker and gremlins reports need their `files` key.
+  - A ratchet baseline must be a number from 0 to 100.
+
 Property-based tests, and one self-grading path closed:
 
 - `tests/test_properties.py` checks invariants for generated inputs rather than examples:

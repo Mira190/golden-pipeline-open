@@ -90,6 +90,29 @@ DEFAULTS: dict[str, dict[str, str]] = {
 MUTATE_SEPARATOR = {"python": " ", "node": ",", "go": " "}
 
 
+def _payload(path: str) -> dict[str, Any]:
+    """The GitHub event file: a JSON object, or an error that names the file."""
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (ValueError, RecursionError) as exc:  # not JSON, not UTF-8, or a deep nest
+        raise ValueError(f"the event payload {path} is not valid JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"the event payload {path} is not a JSON object")
+    return payload
+
+
+def inputs_from_env() -> dict[str, Any]:
+    """The workflow's inputs: `GOLDEN_INPUTS`, a JSON object; unset means all defaults."""
+    text = os.environ.get("GOLDEN_INPUTS") or "{}"
+    try:
+        inputs = json.loads(text)
+    except (ValueError, RecursionError) as exc:  # not JSON, or a deep nest
+        raise ValueError(f"GOLDEN_INPUTS is not valid JSON: {exc}") from exc
+    if not isinstance(inputs, dict):
+        raise ValueError("GOLDEN_INPUTS is not a JSON object")
+    return inputs
+
+
 @dataclass(frozen=True)
 class Event:
     name: str
@@ -98,19 +121,24 @@ class Event:
     @classmethod
     def from_env(cls) -> Event:
         path = os.environ.get("GITHUB_EVENT_PATH")
-        payload = json.loads(Path(path).read_text(encoding="utf-8")) if path else {}
+        payload = _payload(path) if path else {}
         return cls(os.environ.get("GITHUB_EVENT_NAME", ""), payload)
 
     def base(self) -> str:
         """The commit a change is judged against; empty when there is no change to judge."""
         try:
             if self.name in {"pull_request", "pull_request_target"}:
-                return str(self.payload["pull_request"]["base"]["sha"])
-            if self.name == "merge_group":
-                return str(self.payload["merge_group"]["base_sha"])
+                sha = self.payload["pull_request"]["base"]["sha"]
+            elif self.name == "merge_group":
+                sha = self.payload["merge_group"]["base_sha"]
+            else:
+                return ""
         except (KeyError, TypeError) as exc:
             raise ValueError(f"{self.name} event payload has no base commit") from exc
-        return ""
+        # An empty base would read as "no change to judge" and skip every gate.
+        if not isinstance(sha, str) or not sha:
+            raise ValueError(f"{self.name} event payload has no base commit")
+        return sha
 
     def opt_out(self, label: str, repository: str, fetch: optout.Fetch) -> optout.Decision:
         """Whether the test-presence opt-out label counts (a second person applied it)."""
@@ -148,7 +176,10 @@ def commands(language: str, inputs: dict[str, Any], root: Path) -> dict[str, str
         value = inputs.get(key)
         if isinstance(value, str) and value.strip():
             effective[key] = value.strip()
-    versions = json.loads(effective["versions"])
+    try:
+        versions = json.loads(effective["versions"])
+    except (ValueError, RecursionError) as exc:  # not JSON, or a deep nest
+        raise ValueError(f"versions is not valid JSON: {exc}") from exc
     if not isinstance(versions, list) or not versions:
         raise ValueError("versions must be a non-empty JSON list")
     effective["primary-version"] = str(versions[-1])

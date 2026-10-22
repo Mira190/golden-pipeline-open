@@ -46,6 +46,27 @@ def api_get(path: str, token: str | None) -> object:
         return None
 
 
+def _object(value: object) -> dict[str, Any]:
+    """`value` if it is a JSON object, else an empty one: a field that is not what GitHub sends
+    proves nothing."""
+    return value if isinstance(value, dict) else {}
+
+
+def _label_names(pr: dict[str, Any]) -> set[str]:
+    """The names of the labels on a pull request object; an entry that is no label is skipped."""
+    labels = pr.get("labels")
+    if not isinstance(labels, list):
+        return set()
+    return {name for lbl in labels if isinstance(name := _object(lbl).get("name"), str)}
+
+
+def _login(user: object) -> str | None:
+    """The login of a user object, None unless it is a name: a login that is a list or a number
+    must not count as a person."""
+    login = _object(user).get("login")
+    return login if isinstance(login, str) and login else None
+
+
 def applier(repository: str, number: int, label: str, fetch: Fetch) -> str | None:
     """Login of whoever most recently applied `label` to the PR; None if unknown."""
     latest: str | None = None
@@ -57,9 +78,9 @@ def applier(repository: str, number: int, label: str, fetch: Fetch) -> str | Non
             if (
                 isinstance(event, dict)
                 and event.get("event") == "labeled"
-                and (event.get("label") or {}).get("name") == label
+                and _object(event.get("label")).get("name") == label
             ):
-                latest = (event.get("actor") or {}).get("login") or None
+                latest = _login(event.get("actor"))
         if len(events) < 100:  # last page
             return latest
     return None  # more events than we read: the latest application may be beyond them
@@ -68,15 +89,15 @@ def applier(repository: str, number: int, label: str, fetch: Fetch) -> str | Non
 def decide(
     payload: dict[str, Any], event_name: str, label: str, repository: str, fetch: Fetch
 ) -> Decision:
-    pr = payload.get("pull_request") or {}
-    labels = {lbl.get("name") for lbl in pr.get("labels", []) if isinstance(lbl, dict)}
-    if not label or label not in labels:
+    pr = _object(payload.get("pull_request"))
+    if not label or label not in _label_names(pr):
         return NOT_REQUESTED
-    author = (pr.get("user") or {}).get("login")
-    if event_name == "pull_request" and (payload.get("label") or {}).get("name") == label:
-        who = (payload.get("sender") or {}).get("login")
+    author = _login(pr.get("user"))
+    if event_name == "pull_request" and _object(payload.get("label")).get("name") == label:
+        who = _login(payload.get("sender"))
     else:
-        who = applier(repository, int(pr.get("number", 0)), label, fetch)
+        number = pr.get("number")
+        who = applier(repository, number if type(number) is int else 0, label, fetch)
     if not who or not author:
         return Decision(
             report_only=False,

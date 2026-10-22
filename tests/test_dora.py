@@ -122,3 +122,37 @@ def test_rework_rate():
     assert dora.compute(partial).deployment_rework_rate == 0.5
     thirds = [{**r, "rework": i == 0} for i, r in enumerate(RECORDS[:3])]
     assert dora.compute(thirds).deployment_rework_rate == 0.333
+
+
+# ------------------------------------------------------------- found by tests/test_fuzz.py
+@pytest.mark.parametrize("key", ["committed_at", "deployed_at"])
+def test_a_null_required_time_is_an_error_not_a_key_error(key):
+    # `"committed_at": null` passed the "is it there" check and then raised a KeyError.
+    with pytest.raises(ValueError, match=rf"^line 1: {key} is not an ISO-8601 timestamp") as raised:
+        dora.parse_log(line(**{key: None}))
+    assert type(raised.value) is ValueError
+
+
+def test_a_null_restored_at_is_still_fine():
+    assert dora.parse_log(line(failed=True, restored_at=None))[0]["restored_at"] is None
+
+
+@pytest.mark.parametrize("key", ["failed", "rework"])
+@pytest.mark.parametrize("value", [None, 0, 1, "false", "no", [], {}, 1.0])
+def test_failed_and_rework_are_true_or_false(key, value):
+    # `"failed": null` counted as a success and `"failed": "no"` as a failure.
+    with pytest.raises(ValueError, match=rf"^line 1: {key} must be true or false"):
+        dora.parse_log(line(**{key: value}))
+
+
+@pytest.mark.parametrize("key", ["failed", "rework"])
+def test_failed_and_rework_accept_true_and_false(key):
+    for value in (True, False):
+        assert dora.parse_log(line(**{key: value}))[0][key] is value
+
+
+def test_a_line_nested_too_deeply_is_not_json_not_a_recursion_error():
+    deep = "[" * 100_000 + "]" * 100_000
+    with pytest.raises(ValueError, match=r"^line 2: not JSON") as raised:
+        dora.parse_log(line() + "\n" + '{"sha": ' + deep + "}")
+    assert type(raised.value) is ValueError

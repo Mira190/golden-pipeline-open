@@ -864,3 +864,45 @@ def test_the_waiver_does_not_hide_a_broken_report(change, repo, capsys):
     base, _ = commit_waiver(repo)
     write(repo.root, "{")
     assert cli.main(["sast", "report.sarif", "--base", base]) == 2
+
+
+# ------------------------------------------------------------- found by tests/test_fuzz.py
+def test_a_report_nested_too_deeply_is_not_valid_json_not_a_recursion_error(tmp_path):
+    with pytest.raises(ValueError, match=r"report\.sarif is not valid JSON") as raised:
+        sarif.read([write(tmp_path, "[" * 100_000 + "]" * 100_000)])
+    assert type(raised.value) is ValueError
+
+
+@pytest.mark.parametrize("level", [None, "", 0, False, [], {}, "ERROR"])
+def test_a_level_that_is_there_but_is_not_a_level_is_not_the_default(tmp_path, level):
+    # `"level": null` used to read as "no level": an error became the rule's default or a
+    # warning, and stopped blocking.
+    found = {**result(), "level": level}
+    rules = [{"id": "R1", "defaultConfiguration": {"level": "note"}}]
+    with pytest.raises(ValueError, match=r"malformed SARIF report .*report\.sarif"):
+        read(tmp_path, run(found, rules=rules))
+
+
+def test_a_level_of_none_is_still_a_result_that_is_not_a_finding(tmp_path):
+    assert read(tmp_path, run(result(level="none"))) == []
+
+
+@pytest.mark.parametrize("kind", [None, 5, True, "", "Fail", "failed", "bogus", [], {}])
+def test_a_kind_that_is_not_a_sarif_kind_cannot_drop_a_finding(tmp_path, kind):
+    # Anything that was not "fail" used to mean "not a failure": the finding was dropped.
+    with pytest.raises(ValueError, match=r"malformed SARIF report .*report\.sarif"):
+        read(tmp_path, run({**result(level=None), "kind": kind}))
+
+
+@pytest.mark.parametrize(
+    "kind", ["fail", "pass", "open", "review", "notApplicable", "informational"]
+)
+def test_every_sarif_kind_is_understood(tmp_path, kind):
+    found = read(tmp_path, run({**result(level=None), "kind": kind}))
+    assert [f.level for f in found] == (["warning"] if kind == "fail" else [])
+
+
+def test_the_reason_a_kind_is_refused_is_named(tmp_path):
+    with pytest.raises(ValueError, match=r"malformed SARIF report .*report\.sarif") as raised:
+        read(tmp_path, run({**result(level=None), "kind": "bogus"}))
+    assert str(raised.value.__cause__) == "unknown kind 'bogus'"

@@ -362,3 +362,76 @@ def test_error_messages_list_every_problem():
 def test_load_defaults_to_golden_toml_in_the_working_directory(repo):
     (repo.root / "golden.toml").write_text("[mutation]\nmin_score = 91\n")
     assert config.load(today=TODAY).get("mutation.min_score") == 91
+
+
+# ------------------------------------------------------------- found by tests/test_fuzz.py
+# A golden.toml the reader cannot use is a PolicyError that names the file: not an
+# OverflowError, a RecursionError, a UnicodeDecodeError or a ValueError that is no PolicyError.
+def policy_file(tmp_path, content):
+    path = tmp_path / "golden.toml"
+    path.write_bytes(content if isinstance(content, bytes) else content.encode())
+    return path
+
+
+@pytest.mark.parametrize("value", ["1" + "0" * 400, "-1" + "0" * 400])
+def test_an_integer_too_large_for_a_float_is_a_policy_error(tmp_path, value):
+    path = policy_file(tmp_path, f"[coverage]\ndiff_min = {value}\n")
+    with pytest.raises(
+        config.PolicyError, match=r"^coverage\.diff_min is too large to be a number"
+    ):
+        config.load(path, TODAY)
+    with pytest.raises(config.PolicyError, match=r"^coverage\.diff_min is too large"):
+        load({"coverage": {"diff_min": int(value)}})
+
+
+def test_an_integer_of_thousands_of_digits_is_a_policy_error(tmp_path):
+    # tomllib raises a plain ValueError for it (Python's limit on integer strings).
+    path = policy_file(tmp_path, "[coverage]\ndiff_min = " + "9" * 5000 + "\n")
+    with pytest.raises(config.PolicyError, match=r"golden\.toml: ") as raised:
+        config.load(path, TODAY)
+    assert type(raised.value) is config.PolicyError
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["a = " + "[" * 5000 + "]" * 5000, "a = " + "{a = " * 5000 + "0" + "}" * 5000],
+    ids=["arrays", "inline-tables"],
+)
+def test_a_file_nested_too_deeply_is_a_policy_error(tmp_path, text):
+    with pytest.raises(
+        config.PolicyError, match=r"golden\.toml: maximum recursion depth"
+    ) as raised:
+        config.load(policy_file(tmp_path, text), TODAY)
+    assert type(raised.value) is config.PolicyError
+
+
+@pytest.mark.parametrize(
+    "content", [b"\xff\xfe", b"[coverage]\n\x80", b"\xef\xbb\xbf[coverage]\n\xff"]
+)
+def test_a_file_that_is_not_utf8_is_a_policy_error(tmp_path, content):
+    path = policy_file(tmp_path, content)
+    with pytest.raises(config.PolicyError, match=r"golden\.toml: not UTF-8 text") as raised:
+        config.load(path, TODAY)
+    assert type(raised.value) is config.PolicyError
+
+
+@pytest.mark.parametrize("reason", [5, True, ["flaky"], {"why": "flaky"}, "", "  "])
+def test_a_waiver_reason_that_is_not_text_is_not_a_reason(reason):
+    spec = {"reason": reason, "expires": TODAY + dt.timedelta(days=30)}
+    with pytest.raises(config.PolicyError, match="waiver for sast needs a reason"):
+        load({"waivers": {"sast": spec}})
+
+
+def test_a_waiver_reason_is_kept_without_its_padding():
+    spec = {"reason": "  flaky vendor \n", "expires": TODAY + dt.timedelta(days=30)}
+    assert load({"waivers": {"sast": spec}}).waivers["sast"].reason == "flaky vendor"
+
+
+def test_the_policy_file_is_judged_by_the_date_it_is_given(tmp_path):
+    day = dt.date(2000, 1, 1)
+    path = tmp_path / "golden.toml"
+    path.write_text(f'[waivers.sast]\nreason = "r"\nexpires = {day + dt.timedelta(days=90)}\n')
+    assert config.load(path, day).waivers["sast"].expires == day + dt.timedelta(days=90)
+    path.write_text(f'[waivers.sast]\nreason = "r"\nexpires = {day + dt.timedelta(days=91)}\n')
+    with pytest.raises(config.PolicyError, match="waiver for sast may last at most 90 days"):
+        config.load(path, day)

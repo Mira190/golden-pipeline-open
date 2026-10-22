@@ -35,6 +35,8 @@ LEVELS = {"none": 0, "note": 1, "warning": 2, "error": 3}
 THRESHOLDS = ("error", "warning", "note")
 # SARIF's own default for a result that names no level and whose rule names none either.
 DEFAULT_LEVEL = "warning"
+# What a result is (SARIF 3.27.9). Only `fail` is a finding.
+KINDS = frozenset({"fail", "pass", "open", "review", "notApplicable", "informational"})
 # Findings annotated and listed in the summary; the most severe come first.
 MAX_LISTED = 50
 # A result a baseline comparison marks as already known, or as no longer present, is not a
@@ -76,7 +78,9 @@ def _load(path: Path) -> list[Any]:
         raise FileNotFoundError(f"SARIF report {path} not found; did the analysis tool run?")
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except ValueError as exc:  # JSONDecodeError, and UnicodeDecodeError for a binary file
+    except (ValueError, RecursionError) as exc:
+        # JSONDecodeError, UnicodeDecodeError for a binary file, and RecursionError for a
+        # document nested a few thousand levels deep.
         raise ValueError(f"SARIF report {path} is not valid JSON: {exc}") from exc
     if not isinstance(data, dict) or not isinstance(data.get("runs"), list):
         raise ValueError(f"{path} is not a SARIF log: it has no `runs` list")
@@ -118,10 +122,18 @@ def _rule(run: dict[str, Any], result: dict[str, Any], rule_id: object) -> dict[
 
 
 def _level(result: dict[str, Any], rule: dict[str, Any]) -> str:
-    """The result's level, else its rule's default, else "warning" (SARIF 3.27.10)."""
-    level = result.get("level")
-    if level is None:
-        if result.get("kind", "fail") != "fail":
+    """The result's level, else its rule's default, else "warning" (SARIF 3.27.10).
+
+    A level that is there must be a level. A null or garbled one is not "no level": reading it
+    as the default would turn an error into a warning.
+    """
+    if "level" in result:
+        level = result["level"]
+    else:
+        kind = result.get("kind", "fail")
+        if kind not in KINDS:
+            raise ValueError(f"unknown kind {kind!r}")
+        if kind != "fail":
             return "none"
         level = (rule.get("defaultConfiguration") or {}).get("level") or DEFAULT_LEVEL
     if level not in LEVELS:

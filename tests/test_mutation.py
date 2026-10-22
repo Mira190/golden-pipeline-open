@@ -1,5 +1,6 @@
 import json
 import shutil
+import time
 from pathlib import Path
 
 import pytest
@@ -136,7 +137,8 @@ def test_missing_report_fails_closed(tmp_path, fmt):
 
 
 @pytest.mark.parametrize(
-    ("fmt", "data"), [("mutmut", {}), ("stryker", {"files": {}}), ("gremlins", {"files": []})]
+    ("fmt", "data"),
+    [("mutmut", {"killed": 0}), ("stryker", {"files": {}}), ("gremlins", {"files": []})],
 )
 def test_empty_report_has_no_score(tmp_path, fmt, data):
     assert mutation.evaluate(write(tmp_path, data), fmt)[0].score is None
@@ -1160,7 +1162,7 @@ def test_a_mutants_directory_without_results(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize(
     "stats",
-    [{"killed": 5}, {"killed": 3, "skipped": 4, "timeout": 1}, {}],
+    [{"killed": 5}, {"killed": 3, "skipped": 4, "timeout": 1}, {"killed": 0}],
 )
 def test_nothing_to_locate_is_nothing_to_say(tmp_path, monkeypatch, stats):
     monkeypatch.chdir(tmp_path)
@@ -1436,3 +1438,224 @@ def test_defs_reads_lines_as_python_does(tmp_path):
         b"x = 1  # \x0c \xe2\x80\xa8 \xc2\x85 \xc2\xa0\r\ndef f():\r\n    return 1\r\n"
     )
     assert mutation._defs(path) == {("", "f"): (2, ["def f():", "    return 1"])}
+
+
+# ------------------------------------------------------------- found by tests/test_fuzz.py
+DEEP = "[" * 100_000 + "]" * 100_000
+
+
+def write_text(tmp_path, content, name="report.json"):
+    path = tmp_path / name
+    path.write_bytes(content if isinstance(content, bytes) else content.encode())
+    return path
+
+
+@pytest.mark.parametrize("fmt", mutation.PARSERS)
+@pytest.mark.parametrize(
+    "content",
+    [
+        b"",
+        b"{",
+        b"not json",
+        b"\xff\xfe",
+        b"\xef\xbb\xbf{}",
+        pytest.param(DEEP, id="deeply-nested"),
+    ],
+)
+def test_a_report_that_is_not_json_is_a_value_error_that_names_it(tmp_path, fmt, content):
+    path = write_text(tmp_path, content)
+    with pytest.raises(
+        ValueError, match=r"mutation report .*report\.json is not valid JSON"
+    ) as raised:
+        mutation.evaluate(path, fmt)
+    assert type(raised.value) is ValueError
+
+
+def one_stryker(line=1, status="Survived", **fields):
+    mutant = {"status": status, "mutatorName": "M", "location": {"start": {"line": line}}}
+    return {"files": {"a.ts": {"mutants": [{**mutant, **fields}]}}}
+
+
+def one_gremlins(line=1, status="LIVED", **fields):
+    mutation_ = {"line": line, "type": "T", "status": status, **fields}
+    return {"files": [{"file_name": "a.go", "mutations": [mutation_]}]}
+
+
+@pytest.mark.parametrize(("fmt", "make"), [("stryker", one_stryker), ("gremlins", one_gremlins)])
+@pytest.mark.parametrize("line", [0, -1, 1.0, 1.5, "1", True, None, []])
+def test_a_mutant_that_is_not_on_a_line_is_an_error(tmp_path, fmt, make, line):
+    with pytest.raises(ValueError, match=f"malformed {fmt} report .*is not a line number"):
+        mutation.evaluate(write(tmp_path, make(line=line)), fmt)
+
+
+@pytest.mark.parametrize("line", ["Infinity", "1e999", "-Infinity"])
+@pytest.mark.parametrize("fmt", ["stryker", "gremlins"])
+def test_a_line_that_is_infinite_is_an_error_not_an_overflow(tmp_path, fmt, line):
+    # int(float("inf")) is an OverflowError.
+    text = json.dumps(one_stryker() if fmt == "stryker" else one_gremlins())
+    path = write_text(tmp_path, text.replace('"line": 1', f'"line": {line}'))
+    with pytest.raises(ValueError, match=f"malformed {fmt} report .*is not a line number"):
+        mutation.evaluate(path, fmt)
+
+
+def test_the_first_line_is_a_line(tmp_path):
+    for fmt, data in (("stryker", one_stryker(line=1)), ("gremlins", one_gremlins(line=1))):
+        _, lived = mutation.evaluate(write(tmp_path, data), fmt)
+        assert [m.line for m in lived] == [1]
+
+
+@pytest.mark.parametrize("status", [None, 5, True, [], ["Survived"], {"a": 1}])
+@pytest.mark.parametrize("fmt", ["stryker", "gremlins"])
+def test_a_status_that_is_not_a_string_cannot_hide_a_survivor(tmp_path, fmt, status):
+    # It used to count as "no verdict" and drop the survivor from the score.
+    data = one_stryker(status=status) if fmt == "stryker" else one_gremlins(status=status)
+    with pytest.raises(ValueError, match=f"malformed {fmt} report .*status .* is not a string"):
+        mutation.evaluate(write(tmp_path, data), fmt)
+
+
+@pytest.mark.parametrize("fmt", ["stryker", "gremlins"])
+def test_a_status_the_tool_defines_but_scores_nothing_is_still_no_verdict(tmp_path, fmt):
+    data = one_stryker(status="Whatever") if fmt == "stryker" else one_gremlins(status="WHATEVER")
+    tally, lived = mutation.evaluate(write(tmp_path, data), fmt)
+    assert (tally, lived) == (mutation.Tally(invalid=1), [])
+
+
+@pytest.mark.parametrize("name", ["mutatorName", "type"])
+def test_a_mutator_name_that_is_not_a_string_is_an_error(tmp_path, name):
+    fmt = "stryker" if name == "mutatorName" else "gremlins"
+    data = one_stryker(**{name: 5}) if fmt == "stryker" else one_gremlins(**{name: ["x"]})
+    with pytest.raises(ValueError, match=f"malformed {fmt} report .*{name} .* is not a string"):
+        mutation.evaluate(write(tmp_path, data), fmt)
+
+
+@pytest.mark.parametrize(
+    ("fmt", "data"),
+    [
+        ("stryker", {}),
+        ("stryker", {"thresholds": {}}),
+        ("stryker", {"files": {"a.ts": {}}}),
+        ("stryker", {"files": {"a.ts": {"mutations": []}}}),
+        ("mutation-testing-elements", {}),
+        ("gremlins", {}),
+        ("gremlins", {"go_module": "m"}),
+        ("gremlins", {"files": [{"file_name": "a.go"}]}),
+        ("gremlins", {"files": [{"file_name": "a.go", "mutants": []}]}),
+    ],
+)
+def test_a_report_without_its_files_or_mutants_is_not_a_report_without_mutants(tmp_path, fmt, data):
+    # A renamed key must not read as a clean run.
+    with pytest.raises(ValueError, match=f"malformed {fmt} report"):
+        mutation.evaluate(write(tmp_path, data), fmt)
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"foo": 1},
+        {},
+        {"total": 12, "skipped": 3},  # not one of the counts the score is made of
+        [],
+        None,
+        "killed",
+    ],
+)
+def test_mutmut_stats_without_any_count_are_an_error(tmp_path, data):
+    with pytest.raises(ValueError, match="malformed mutmut report"):
+        mutation.evaluate(write(tmp_path, data), "mutmut")
+
+
+@pytest.mark.parametrize("data", [{}, {"foo": 1}, {"total": 12, "skipped": 3}, []])
+def test_the_reason_mutmut_stats_are_refused_is_named(tmp_path, data):
+    with pytest.raises(ValueError, match=r"malformed mutmut report ") as raised:
+        mutation.evaluate(write(tmp_path, data), "mutmut")
+    assert str(raised.value.__cause__) == "none of mutmut's counts is in the report"
+
+
+@pytest.mark.parametrize("key", mutation.MUTMUT_COUNTS)
+@pytest.mark.parametrize("value", [-1, "1", 1.0, 1.5, True, None, [1], float("inf")])
+def test_a_mutmut_count_must_be_a_whole_number_from_zero(tmp_path, key, value):
+    path = write(tmp_path, {"killed": 5, "survived": 1, key: value})
+    with pytest.raises(ValueError, match=rf"malformed mutmut report .*{key} is .*, not a count"):
+        mutation.evaluate(path, "mutmut")
+
+
+def test_mutmut_counts_that_are_zero_or_absent_are_fine(tmp_path):
+    stats = dict.fromkeys(mutation.MUTMUT_COUNTS, 0)
+    tally, _ = mutation.evaluate(write(tmp_path, stats), "mutmut")
+    assert tally == mutation.Tally()
+    tally, _ = mutation.evaluate(write(tmp_path, {"survived": 4}), "mutmut")
+    assert tally == mutation.Tally(survived=4)
+
+
+# The survivors are an extra: whatever mutants/ holds, the verdict is the stats file's.
+def test_a_meta_file_nested_too_deeply_is_a_note_not_a_crash(tmp_path, monkeypatch):
+    stats = mutmut_tree(tmp_path, monkeypatch)
+    Path(f"mutants/{PRICING}.meta").write_text(DEEP, encoding="utf-8")
+    tally, lived = mutation.evaluate(stats, "mutmut")
+    assert (lived, tally) == ([], FIXTURE_TALLY)
+    assert tally.locate_failure == f"mutants/{PRICING}.meta is unreadable or malformed"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "    return " + "1" + " + 1" * 100_000,  # a deep AST: RecursionError in the parser
+        "    return " + "-" * 100_000 + "1",
+        "    return " + "(" * 300 + "1" + ")" * 300,  # SyntaxError: too many nested parentheses
+    ],
+    ids=["sum", "negations", "parentheses"],
+)
+def test_a_source_file_python_cannot_parse_leaves_the_survivors_unplaced(
+    tmp_path, monkeypatch, body
+):
+    stats = mutmut_tree(tmp_path, monkeypatch)
+    Path(PRICING).write_text(f"def discount(a):\n{body}\n", encoding="utf-8")
+    tally, lived = mutation.evaluate(stats, "mutmut")
+    assert lived == []
+    assert tally.survived == FIXTURE_TALLY.survived
+    assert tally.unlocated
+    assert tally.locate_failure == ""
+
+
+@pytest.mark.parametrize("trailer", [" ", "\t", "\r", " " * 40_000])
+def test_trailing_whitespace_does_not_change_what_is_a_logging_call(trailer):
+    assert mutation.is_arid_line("console.log(x);" + trailer, mutation.JS_ARID)
+    assert mutation.is_arid_line("console.log(x)" + trailer, mutation.JS_ARID)
+    assert mutation.is_arid_line("log.Println(x)" + trailer, mutation.GO_ARID)
+    assert not mutation.is_arid_line("console.log(x); y()" + trailer, mutation.JS_ARID)
+
+
+def test_a_long_run_of_spaces_after_a_call_does_not_stall_the_arid_check():
+    # `\)\s*;?\s*$` backtracked quadratically: 30,000 spaces took 20 seconds, a few seconds
+    # of CI for each such line a pull request adds. Now it takes milliseconds.
+    started = time.perf_counter()
+    line = "console.log(a)" + " " * 30_000 + "x"
+    assert not mutation.is_arid_line(line, mutation.JS_ARID)
+    assert not mutation.is_arid_line(
+        "console.log(" + ")" * 30_000 + " " * 30_000 + "x", mutation.JS_ARID
+    )
+    assert time.perf_counter() - started < 2
+
+
+@pytest.mark.parametrize(
+    ("fmt", "data"),
+    [
+        (
+            "stryker",
+            {
+                "files": {
+                    "a.ts": {
+                        "mutants": [{"status": "Survived", "location": {"start": {"line": 3}}}]
+                    }
+                }
+            },
+        ),
+        (
+            "gremlins",
+            {"files": [{"file_name": "a.go", "mutations": [{"line": 3, "status": "LIVED"}]}]},
+        ),
+    ],
+)
+def test_a_mutant_without_a_mutator_name_has_an_empty_one(tmp_path, fmt, data):
+    _, lived = mutation.evaluate(write(tmp_path, data), fmt)
+    assert [(m.line, m.mutator) for m in lived] == [(3, "")]

@@ -87,7 +87,7 @@ def _go_events(text: str) -> Iterator[tuple[str, str, str]]:
             continue
         try:
             event = json.loads(line)
-        except json.JSONDecodeError as exc:
+        except (json.JSONDecodeError, RecursionError) as exc:  # RecursionError: a deep nest
             raise ValueError(f"line {number} is not JSON: {exc}") from exc
         if not isinstance(event, dict):
             raise ValueError(f"line {number} is not a JSON object")

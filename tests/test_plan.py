@@ -69,7 +69,7 @@ def test_unknown_language(tmp_path):
 
 
 def test_bad_versions_matrix(tmp_path):
-    with pytest.raises(json.JSONDecodeError):
+    with pytest.raises(ValueError, match=r"^versions is not valid JSON: Expecting ',' delimiter"):
         plan.commands("go", {"versions": "[3.12"}, tmp_path)
 
 
@@ -370,3 +370,81 @@ def test_cli_plan_warns_about_large_changes(repo, monkeypatch, tmp_path, capsys,
     assert cli.main(["plan", "--language", "python"]) == 0
     out = capsys.readouterr().out
     assert (f"::warning::Large change: {lines} changed lines" in out) is warned
+
+
+# ------------------------------------------------------------- found by tests/test_fuzz.py
+@pytest.mark.parametrize("sha", ["", None, 0, 5, False, ["abc"], {"sha": "abc"}])
+def test_a_base_that_is_not_a_commit_name_is_an_error_not_no_change(sha):
+    # An empty base reads as "no change to judge" and skips every gate; str(None) was "None".
+    with pytest.raises(ValueError, match=r"^pull_request event payload has no base commit$"):
+        pr_event(sha).base()
+    event = plan.Event("merge_group", {"merge_group": {"base_sha": sha}})
+    with pytest.raises(ValueError, match=r"^merge_group event payload has no base commit$"):
+        event.base()
+
+
+def test_a_pull_request_target_event_needs_its_base_too():
+    event = plan.Event("pull_request_target", {"pull_request": {"base": {"sha": ""}}})
+    with pytest.raises(ValueError, match=r"^pull_request_target event payload has no base commit$"):
+        event.base()
+
+
+@pytest.mark.parametrize("name", ["push", "schedule", "workflow_dispatch", ""])
+def test_an_event_without_a_change_to_judge_has_no_base_whatever_it_holds(name):
+    assert plan.Event(name, {"pull_request": {"base": {"sha": ""}}}).base() == ""
+
+
+@pytest.mark.parametrize(
+    ("content", "reason"),
+    [
+        (b"", "is not valid JSON"),
+        (b"{", "is not valid JSON"),
+        (b"\xff", "is not valid JSON"),
+        (b"[" * 100_000, "is not valid JSON"),
+        (b"[]", "is not a JSON object"),
+        (b"null", "is not a JSON object"),
+        (b'"pull_request"', "is not a JSON object"),
+    ],
+)
+def test_an_event_file_that_is_no_json_object_is_an_error_naming_it(
+    tmp_path, monkeypatch, content, reason
+):
+    path = tmp_path / "event.json"
+    path.write_bytes(content)
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(path))
+    with pytest.raises(ValueError, match=r"^the event payload .*event\.json ") as raised:
+        plan.Event.from_env()
+    assert type(raised.value) is ValueError
+    assert str(raised.value).startswith(f"the event payload {path} {reason}")
+
+
+def test_workflow_inputs_are_read_from_the_environment(monkeypatch):
+    assert plan.inputs_from_env() == {}
+    monkeypatch.setenv("GOLDEN_INPUTS", "")
+    assert plan.inputs_from_env() == {}
+    monkeypatch.setenv("GOLDEN_INPUTS", '{"test-command": "make"}')
+    assert plan.inputs_from_env() == {"test-command": "make"}
+
+
+@pytest.mark.parametrize(
+    ("text", "reason"),
+    [
+        ("{", "is not valid JSON"),
+        ("[" * 100_000, "is not valid JSON"),
+        ("null", "is not a JSON object"),
+        ("[]", "is not a JSON object"),
+        ('"x"', "is not a JSON object"),
+        ("0", "is not a JSON object"),
+    ],
+)
+def test_workflow_inputs_that_are_no_json_object_are_an_error(monkeypatch, text, reason):
+    monkeypatch.setenv("GOLDEN_INPUTS", text)
+    with pytest.raises(ValueError, match=rf"^GOLDEN_INPUTS {reason}") as raised:
+        plan.inputs_from_env()
+    assert type(raised.value) is ValueError
+
+
+def test_a_versions_matrix_nested_too_deeply_is_an_error(tmp_path):
+    with pytest.raises(ValueError, match=r"^versions is not valid JSON") as raised:
+        plan.commands("go", {"versions": "[" * 100_000}, tmp_path)
+    assert type(raised.value) is ValueError

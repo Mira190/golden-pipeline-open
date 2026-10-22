@@ -48,14 +48,22 @@ def parse_log(text: str) -> list[dict[str, Any]]:
         where = f"line {number}"
         try:
             record = json.loads(line)
-        except ValueError as exc:
+        except (ValueError, RecursionError) as exc:  # RecursionError: a deep nest
             raise ValueError(f"{where}: not JSON ({exc})") from exc
         if not isinstance(record, dict):
             raise ValueError(f"{where}: expected a JSON object")
         missing = [k for k in REQUIRED if k not in record]
         if missing:
             raise ValueError(f"{where}: missing {', '.join(missing)}")
-        times = {k: _when(record, k, where) for k in TIMESTAMPS if record.get(k) is not None}
+        for key in ("failed", "rework"):
+            if key in record and not isinstance(record[key], bool):
+                raise ValueError(f"{where}: {key} must be true or false")
+        # `restored_at` may be null; the other two are required, and null is not a time.
+        times = {
+            k: _when(record, k, where)
+            for k in TIMESTAMPS
+            if k in REQUIRED or record.get(k) is not None
+        }
         if times["deployed_at"] < times["committed_at"]:
             raise ValueError(f"{where}: deployed_at is before committed_at")
         if "restored_at" in times and times["restored_at"] < times["deployed_at"]:

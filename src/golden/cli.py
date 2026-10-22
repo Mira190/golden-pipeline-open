@@ -85,7 +85,7 @@ def cmd_policy(args: argparse.Namespace) -> int:
 
 # ----------------------------------------------------------------- plan
 def cmd_plan(args: argparse.Namespace) -> int:
-    inputs = json.loads(os.environ.get("GOLDEN_INPUTS") or "{}")
+    inputs = plan.inputs_from_env()
     event = plan.Event.from_env()
     repository, token = os.environ.get("GITHUB_REPOSITORY", ""), os.environ.get("GITHUB_TOKEN")
     opt_out = event.opt_out(
@@ -378,7 +378,7 @@ def cmd_flaky_scan(args: argparse.Namespace) -> int:
 
 # ----------------------------------------------------------------- local
 def cmd_local(args: argparse.Namespace) -> int:
-    inputs = json.loads(os.environ.get("GOLDEN_INPUTS") or "{}")
+    inputs = plan.inputs_from_env()
     for pair in args.set:
         key, sep, value = pair.partition("=")
         if not sep:

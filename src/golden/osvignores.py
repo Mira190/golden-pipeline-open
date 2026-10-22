@@ -35,6 +35,11 @@ def files(root: Path) -> list[Path]:
     )
 
 
+def _text(value: object) -> str:
+    """The text of a TOML string, stripped; empty when the value is no string."""
+    return value.strip() if isinstance(value, str) else ""
+
+
 def _until(value: object, where: str) -> dt.date:
     if isinstance(value, dt.datetime):
         return value.date()
@@ -50,16 +55,19 @@ def check(root: Path, today: dt.date) -> list[Ignore]:
         name = path.relative_to(root).as_posix()
         try:
             data = tomllib.loads(path.read_text(encoding="utf-8"))
-        except tomllib.TOMLDecodeError as exc:
+        except (ValueError, RecursionError) as exc:
+            # TOMLDecodeError, not UTF-8, an integer of more than 4300 digits, or arrays
+            # nested too deeply.
             raise PolicyError(f"{name}: {exc}") from exc
         entries = data.get("IgnoredVulns", [])
         if not isinstance(entries, list):
             raise PolicyError(f"{name}: IgnoredVulns must be an array of tables")
         for index, entry in enumerate(entries):
             where = f"{name}: IgnoredVulns[{index}]"
-            if not isinstance(entry, dict) or not str(entry.get("id", "")).strip():
+            # A number or a list is no advisory id and no reason: str() would accept both.
+            if not isinstance(entry, dict) or not _text(entry.get("id")):
                 raise PolicyError(f"{where}: id is required")
-            reason = str(entry.get("reason", "")).strip()
+            reason = _text(entry.get("reason"))
             if not reason:
                 raise PolicyError(f"{where} ({entry['id']}): reason is required")
             until = _until(entry.get("ignoreUntil"), f"{where} ({entry['id']})")
@@ -68,5 +76,5 @@ def check(root: Path, today: dt.date) -> list[Ignore]:
                     f"{where} ({entry['id']}): ignoreUntil may be at most "
                     f"{MAX_WAIVER_DAYS} days ahead"
                 )
-            found.append(Ignore(name, str(entry["id"]), reason, until))
+            found.append(Ignore(name, entry["id"], reason, until))
     return found

@@ -963,3 +963,15 @@ def test_cli_help_names_the_argument_of_print_command(capsys):
         cli.main(["flaky-scan", "--help"])
     assert stop.value.code == 0
     assert "--print-command LANGUAGE" in capsys.readouterr().out
+
+
+# ------------------------------------------------------------- found by tests/test_fuzz.py
+@pytest.mark.parametrize("field", ["Action", "Package", "Test", "Extra"])
+def test_a_go_event_nested_too_deeply_is_not_json_not_a_recursion_error(tmp_path, field):
+    deep = "[" * 100_000 + "]" * 100_000
+    line = f'{{"Action": "pass", "Package": "p", "Test": "T", "{field}": {deep}}}'
+    path = tmp_path / "go.json"
+    path.write_text(line)
+    with pytest.raises(ValueError, match=r"go\.json: line 1 is not JSON") as raised:
+        flakescan.read_run(path)
+    assert type(raised.value) is ValueError
