@@ -1,0 +1,83 @@
+# Build a signed image, verify it, then deploy exactly that digest.
+#
+# The deploy job never takes a tag or a digest from a human or from another
+# workflow's artifacts: it gets the digest from the `image` job in the same
+# workflow run (`needs:`), and refuses to continue unless the image carries
+# SLSA build provenance and an SBOM attestation signed by container.yml for
+# this repository. Don't split build and deploy with `workflow_run` (the Golden
+# Pipeline forbids it: it runs with the base repository's token and secrets on
+# the output of a run you don't control); keep them in one workflow.
+#
+# container.yml publishes only from the default branch, so `main` must be the
+# default branch. On any other branch the digest output is empty and the
+# verify step fails closed.
+#
+# The deploy step below is a placeholder: replace it with your own (kubectl,
+# Argo CD, Cloud Run, ...) and keep it using IMAGE@DIGEST, never a tag.
+name: deploy
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+# Never cancel a deploy half-way.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  image:
+    uses: Mira190/golden-pipeline-open/.github/workflows/container.yml@<sha> # v1.0.0
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    with:
+      smoke-command: docker run --rm "$IMAGE" --version
+
+  deploy:
+    name: verify and deploy
+    needs: image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    # Add required reviewers to this environment for a manual approval step.
+    environment: production
+    permissions:
+      attestations: read # gh attestation verify reads the build's attestations
+      packages: read # log in to ghcr.io; drop this and the login step for a public image
+    steps:
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+      # container.yml publishes ghcr.io/<owner>/<repository name>, lowercased.
+      - name: Image name
+        id: name
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: echo "image=ghcr.io/${REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      # Fails the job (and so skips the deploy) unless every check passes.
+      - id: verify
+        uses: Mira190/golden-pipeline-open/actions/verify-image@<sha> # v1.0.0
+        with:
+          image: ${{ steps.name.outputs.image }}
+          digest: ${{ needs.image.outputs.digest }}
+          # repository defaults to this repository; signer-workflow defaults to
+          # the Golden Pipeline container.yml. To also pin the exact container.yml
+          # commit you called, add: signer-digest: <the <sha> used above>
+          source-ref: refs/heads/main
+      - name: Deploy (placeholder)
+        if: steps.verify.outputs.verified == 'true'
+        env:
+          IMAGE: ${{ steps.name.outputs.image }}
+          DIGEST: ${{ needs.image.outputs.digest }}
+        run: |
+          echo "Deploying $IMAGE@$DIGEST"
+          # your-deploy-tool --image "$IMAGE@$DIGEST"
