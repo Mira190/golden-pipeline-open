@@ -13,7 +13,7 @@ re-run, and the limits of each measurement are stated with it.
 |---|---|---|---|
 | It makes the right merge decision | [Decision benchmark](#1-the-right-merge-decision): 94 labelled pull requests through the real CLI | 0 escapes, 0 false blocks, 0 crashes; v1.0.0 had 30, 19 and 7 | `uv run python evals/runner.py` |
 | It catches weak tests that coverage misses | [Drills](#2-weak-tests-with-real-toolchains): 4 changes × 3 languages, with pytest, Vitest, Go and the mutation tools | Coverage passes the weak test in all three languages; mutation blocks it. 10/10 drills reach the expected decision | `uv run python scripts/drill.py <language>` |
-| It catches real bugs | [Real-fault benchmark](#3-real-bugs-from-real-projects) | Not measured yet (in progress) | — |
+| It catches real bugs | [Real-fault benchmark](#3-real-bugs-from-real-projects): 10 real bugs from open-source libraries | The full pipeline flags 4, coverage alone 3; a surviving mutant sits on the faulty line in 6 | `uv run python evals/realfaults/run.py` |
 | It doesn't block legitimate work | 37 legitimate pull requests in the benchmark | 0 false blocks; v1.0.0 blocked 19 | as above |
 | It holds against people who want to get round it | 41 gaming attempts in the benchmark | 0 escapes; v1.0.0 let 30 through | as above |
 | It fails closed | 16 corrupt or malformed inputs | 0 crashes, 0 silent passes | as above |
@@ -118,11 +118,57 @@ The gates are layered so that each covers the others' blind spots.
 
 ## 3. Real bugs from real projects
 
-Not measured yet. A benchmark of real bugs from open-source projects is being built under
-`evals/realfaults/`. For each bug, it applies the bug-introducing change with its own tests and
-records which gate blocks it. The ground truth comes from those projects' issue trackers, not
-from this repository. Until it lands, the coupling between mutants and real faults rests on the
-published studies cited in [section 6](#6-what-this-does-not-prove).
+The [real-fault benchmark](../evals/realfaults/README.md) asks the question the decision benchmark
+can't: for bugs nobody planted, would the gates have flagged the weak tests at the code where the
+bug lived?
+
+- **Source:** 10 real bug fixes from four Python libraries: boltons (4), toolz (2), tabulate (2)
+  and semver (2). They were screened by fixed rules from 77 candidate commits across five
+  projects.
+- **Method:**
+  - Each bug runs at the fix's parent, with the bug live and the tests of that day.
+  - The gates are the platform defaults: diff coverage ≥ 90% and mutation ≥ 80% on the changed
+    functions.
+  - Every regression test was verified to fail before the fix and pass after it.
+
+| Over 10 real bugs | Result |
+|---|---|
+| Faulty lines already executed by the tests of the day | 7 / 10 |
+| A coverage-only pipeline flags the faulty code | **3 / 10** |
+| The full pipeline (diff coverage + mutation) flags it | **4 / 10** |
+| A mutant survives on the bug's own line | **6 / 10** |
+| The fix itself is a surviving mutant (`boltons-bits-length`, `>` to `>=`) | 1 / 10 |
+| Missed by both gates | 6 / 10 |
+
+**What this shows:**
+
+- **Coverage says little about real bugs.** In 7 of 10 the faulty lines were already covered.
+  Coverage flagged only the three bugs in code no test ran, the easy case.
+- **Mutation testing added one catch to coverage.** In `boltons-bits-length` the suite ran the
+  comparison but never pinned its boundary. The fix, `>` to `>=`, is one of the mutants no test
+  killed.
+- **The mutants pointed at the bug more often than the gate blocked.** A mutant survived on the
+  faulty line in 6 of 10 bugs. In two of those the function scored above 80%, so the gate passed.
+  - This is how Google uses mutation testing: surviving mutants go to the reviewer as comments on
+    the line, more than as a pass/fail score.
+  - The benchmark also showed that `golden mutation` did not surface Python survivors at all. It
+    read only mutmut's totals.
+  - Showing them on the line, as the gate already does for TypeScript and Go, is the change
+    this finding calls for.
+- **Four bugs are out of reach for both gates.** Two needed code that wasn't there, a missing
+  `try`/`except` and a missing guard against a hang, and no mutation operator writes missing
+  code. In the two semver bugs every mutant on the faulty line was killed, yet an ordering
+  property was still violated. Those bugs need property-based or example tests that a reviewer
+  asks for.
+
+**Limits:**
+
+- The sample is small, and it covers recent edge-case fixes in five small libraries.
+- The bug-introducing change isn't reconstructed, so test presence isn't evaluated.
+- Each bug was run once.
+- Four screened bugs weren't run within the time budget; the manifest says why for each.
+
+Treat these numbers as an existence proof with an honest denominator, not as a rate.
 
 ## 4. What it costs
 
@@ -205,4 +251,5 @@ development:
     found mutants coupled to 73% of real faults.
   - [Google ICSE 2021](https://arxiv.org/abs/2103.07189) found them coupled to 70% of
     high-priority bugs.
-  - The real-fault benchmark measures that coupling for this pipeline's own configuration.
+  - The real-fault benchmark measures it for this pipeline's own configuration, so far on a
+    small sample (section 3).

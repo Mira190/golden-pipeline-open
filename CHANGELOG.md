@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+Real-fault benchmark:
+
+- `evals/realfaults/` replays real bug fixes from open-source Python libraries through the
+  platform-default gates, at the fix's parent with the tests of that day. Of 77 candidate commits,
+  14 passed screening and 10 ran end to end. Results:
+  - Coverage alone would have flagged 3 of the 10, and the full pipeline 4.
+  - A mutant survived on the bug's own line in 6.
+  - For Python the gate showed none of those survivors to the reviewer.
+- The harness has 100% line and branch coverage under tests that never touch the network. Tests
+  pin its published numbers.
+
 Mutation testing:
 
 - `golden mutation` drops mutants on arid lines from Stryker, mutation-testing-elements and gremlins

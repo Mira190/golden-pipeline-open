@@ -100,6 +100,7 @@ See [configuration](docs/configuration.md) for every key, every workflow input a
 | [Configuration](docs/configuration.md) | `golden.toml`, workflow inputs, language defaults |
 | [Evaluation](docs/evaluation.md) | How the gates themselves are tested, maturity model, effectiveness metrics, drills, DORA |
 | [Decision benchmark](evals/README.md) | 94 labelled pull requests every gate must decide correctly |
+| [Real-fault benchmark](evals/realfaults/README.md) | Real bugs from open-source projects replayed through the gates, with what each gate would have flagged |
 | [Value](docs/value.md) | What the gates catch, what they cost and what that doesn't prove, with reproducible numbers |
 | [Adoption](docs/adoption.md) | Rolling it out to existing repositories, rulesets, monorepos |
 | [Security model](docs/security-model.md) | Threats, the incidents behind each control, and the residual risk |
