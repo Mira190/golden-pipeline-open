@@ -16,15 +16,19 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from golden import gitdiff, impact, presets
+from golden import gitdiff, impact, optout, presets
 from golden.config import Policy
 from golden.globmatch import match_any
 
 ZERO_SHA = "0" * 40
 
 PY_TEST_PLUGINS = (
-    "--with pytest-cov==7.1.0 --with pytest-xdist==3.8.0 --with pytest-randomly==5.0.0"
+    "--with pytest-cov==7.1.0 --with pytest-xdist==3.8.0 --with pytest-randomly==5.0.0 "
+    "--with pytest-timeout==2.5.0"
 )
+# Per-test ceiling, Google's "medium" test size: a hung test fails in minutes with
+# a stack trace instead of burning the job timeout (Vitest and `go test` have one).
+PY_TEST_TIMEOUT = "--timeout=300"
 MUTMUT = "uv run --with mutmut==3.8.0 mutmut"
 GO_TOOLS = {
     "cobertura": "github.com/boumenot/gocover-cobertura@v1.5.0",
@@ -39,11 +43,11 @@ DEFAULTS: dict[str, dict[str, str]] = {
         "format-command": "uvx ruff@0.17.0 format --check --diff .",
         "lint-command": "uvx ruff@0.17.0 check --output-format=github .",
         "typecheck-command": "uv run --with mypy==2.4.0 mypy .",
-        "test-command": f"uv run {PY_TEST_PLUGINS} pytest -n auto -p randomly "
+        "test-command": f"uv run {PY_TEST_PLUGINS} pytest -n auto -p randomly {PY_TEST_TIMEOUT} "
         "--cov --cov-report=xml:coverage.xml --cov-report=term",
         "coverage-report": "coverage.xml",
         "flaky-command": f"uv run {PY_TEST_PLUGINS} --with pytest-repeat==0.9.4 pytest -n auto "
-        '-p randomly --count="$GOLDEN_REPEATS" $GOLDEN_TESTS',
+        f'-p randomly {PY_TEST_TIMEOUT} --count="$GOLDEN_REPEATS" $GOLDEN_TESTS',
         "mutation-command": f"{MUTMUT} run $GOLDEN_MUTATE && {MUTMUT} export-cicd-stats",
         "mutation-report": "mutants/mutmut-cicd-stats.json",
         "mutation-format": "mutmut",
@@ -108,8 +112,9 @@ class Event:
             raise ValueError(f"{self.name} event payload has no base commit") from exc
         return ""
 
-    def labels(self) -> set[str]:
-        return {lbl["name"] for lbl in self.payload.get("pull_request", {}).get("labels", [])}
+    def opt_out(self, label: str, repository: str, fetch: optout.Fetch) -> optout.Decision:
+        """Whether the test-presence opt-out label counts (a second person applied it)."""
+        return optout.decide(self.payload, self.name, label, repository, fetch)
 
 
 def _node_install(root: Path) -> str:
@@ -210,11 +215,36 @@ def gating_changes(base: str, policy_path: Path) -> list[str]:
     return gitdiff.changed_anywhere(base, [*GATING_FILES, policy])
 
 
+# Review effectiveness falls off past a few hundred lines (Google's small-CL
+# guidance; the SmartBear/Cisco review study). A signal for authors, not a gate.
+LARGE_CHANGE = 400
+NOT_REVIEWED_LINE_BY_LINE = ("*.lock", "package-lock.json", "go.sum", "**/__snapshots__/**")
+
+
+def change_size(base: str, exempt: tuple[str, ...]) -> int:
+    """Lines a reviewer must read: lockfiles, snapshots and exempt (generated) files excluded."""
+    if not base:
+        return 0
+    skip = (*NOT_REVIEWED_LINE_BY_LINE, *exempt)
+    return sum(n for path, n in gitdiff.numstat(base).items() if not match_any(path, skip))
+
+
+def large_change_warning(size: int) -> str:
+    return (
+        f"Large change: {size} changed lines to review (excluding lockfiles and exempt files). "
+        f"Reviews of more than {LARGE_CHANGE} lines catch proportionally fewer defects; "
+        "consider splitting it into smaller pull requests."
+    )
+
+
 def build(
-    language: str, inputs: dict[str, Any], event: Event, policy: Policy, root: Path
+    language: str,
+    inputs: dict[str, Any],
+    event: Event,
+    policy: Policy,
+    root: Path,
 ) -> dict[str, str]:
     base = event.base()
-    label = str(inputs.get("skip-presence-label") or "")
     return {
         "slug": slug(str(inputs.get("working-directory") or ".")),
         **commands(language, inputs, root),
@@ -222,7 +252,10 @@ def build(
         "base": base,
         "event": event.name,
         "repeats": f"{policy.get('flaky.repeats'):g}",
-        "presence-report-only": "true" if label and label in event.labels() else "false",
+        "change-size": str(change_size(base, policy.exempt)),
+        # Set by `golden plan` from optout.decide, which needs the API.
+        "presence-report-only": "false",
+        "presence-opt-out": "",
     }
 
 
@@ -249,10 +282,12 @@ def render(language: str, outputs: dict[str, str]) -> str:
         "tests",
         "mutate",
         "gating-changes",
+        "presence-opt-out",
+        "change-size",
     )
     rows = [
         f"| {k} | `{outputs[k].replace('|', '\\|').replace(chr(10), ' ⏎ ')}` |"
-        if outputs[k]
+        if outputs.get(k)
         else f"| {k} | _(none)_ |"
         for k in keys
     ]

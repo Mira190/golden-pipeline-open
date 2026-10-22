@@ -9,6 +9,10 @@ on:
   push:
     branches: [main]
   merge_group:
+  # Daily on the default branch: new advisories, toolchain drift and flaky
+  # tests surface here, not as a surprise on somebody's unrelated PR.
+  schedule:
+    - cron: "23 6 * * *"
 
 permissions: {}
 

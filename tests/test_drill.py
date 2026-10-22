@@ -179,3 +179,43 @@ def test_main_fails_on_an_unexpected_verdict(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "| python | weak | pass | pass | pass | ❌ |" in out
     assert "::error::python/no-tests: expected" in out
+
+
+def test_forged_coverage_scenario_plants_a_conftest_and_an_empty_test(tmp_path, shell):
+    assert drill.scenario("python", "forged-coverage", tmp_path) == dict.fromkeys(
+        ("diff-coverage", "presence", "mutation"), True
+    )
+    tests = tmp_path / "python-forged-coverage/services/python/tests"
+    assert "atexit.register(_forge)" in (tests / "conftest.py").read_text()
+    assert (tests / "test_bulk.py").read_text() == drill.FORGED["python"]["tests/test_bulk.py"]
+
+
+def test_forged_conftest_marks_every_line_covered(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "coverage.xml").write_text(
+        '<coverage line-rate="0.5" branch-rate="0.25"><line hits="0"/><line hits="3"/></coverage>'
+    )
+    namespace = {}
+    exec(drill.FORGED["python"]["tests/conftest.py"], namespace)  # noqa: S102
+    namespace["_forge"]()
+    assert (tmp_path / "coverage.xml").read_text() == (
+        '<coverage line-rate="1" branch-rate="1"><line hits="1"/><line hits="3"/></coverage>'
+    )
+    (tmp_path / "coverage.xml").unlink()
+    namespace["_forge"]()  # no report (e.g. under mutmut): nothing to forge
+    assert not (tmp_path / "coverage.xml").exists()
+
+
+def test_main_runs_forged_coverage_only_where_a_forgery_exists(monkeypatch, capsys):
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    monkeypatch.setattr(drill, "prepare", lambda language: None)
+    seen = []
+    monkeypatch.setattr(
+        drill,
+        "scenario",
+        lambda language, name, workdir: seen.append((language, name)) or drill.EXPECTED[name],
+    )
+    assert drill.main(["python", "go"]) == 0
+    assert ("python", "forged-coverage") in seen
+    assert ("go", "forged-coverage") not in seen
+    assert "| python | forged-coverage | pass | pass | **block** | ✅ |" in capsys.readouterr().out

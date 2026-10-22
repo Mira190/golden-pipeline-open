@@ -106,7 +106,9 @@ Controls:
 - Lockfiles are required (`--locked`, `npm ci`, `--frozen-lockfile`).
 - Cooldowns: `uv exclude-newer = "7 days"` in the examples, and Dependabot `cooldown` (7 days, 14
   for majors).
-- OSV-Scanner and dependency review run on every PR.
+- Dependency review blocks a PR that adds a vulnerable dependency. OSV-Scanner reports on every
+  PR and blocks on the default branch and on the daily schedule. Its exceptions expire within
+  90 days, like waivers.
 
 ### Committed secrets
 

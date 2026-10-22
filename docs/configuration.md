@@ -118,13 +118,16 @@ and was at least 7 days old when pinned.
 | format | `uvx ruff@0.17.0 format --check --diff .` |
 | lint | `uvx ruff@0.17.0 check --output-format=github .` |
 | typecheck | `uv run --with mypy==2.4.0 mypy .` |
-| test | `uv run --with pytest-cov==7.1.0 --with pytest-xdist==3.8.0 --with pytest-randomly==5.0.0 pytest -n auto -p randomly --cov --cov-report=xml:coverage.xml` |
+| test | `uv run --with pytest-cov==7.1.0 --with pytest-xdist==3.8.0 --with pytest-randomly==5.0.0 --with pytest-timeout==2.5.0 pytest -n auto -p randomly --timeout=300 --cov --cov-report=xml:coverage.xml --cov-report=term` |
 | mutation | `mutmut run $GOLDEN_MUTATE && mutmut export-cicd-stats` (mutmut 3.8.0) |
 
 Requirements:
 
 - a `uv.lock`
 - pytest in your dev dependencies (the plugins are added with `--with`)
+- tests that finish within 300 s each. `--timeout=300` kills a hung test with a stack trace, the
+  ceiling of a Google "medium" test. Vitest (5 s) and `go test` (10 min) have defaults of their
+  own. Mark a slower test with `@pytest.mark.timeout(...)`.
 - `[tool.coverage.run] relative_files = true`
 - a `[tool.mutmut]` section (`source_paths = ["src/yourpkg/"]`)
 
@@ -226,14 +229,17 @@ reason = "Not reachable: we never parse untrusted input with this library. Track
 ```
 
 This is the same reason-plus-expiry model as a [`golden.toml` waiver](#waivers), where `expires`
-may be at most 90 days ahead. OSV-Scanner does not enforce that, and treats `reason` and
-`ignoreUntil` as optional, so:
+may be at most 90 days ahead. OSV-Scanner itself treats `reason` and `ignoreUntil` as optional,
+so the pipeline enforces them:
 
-- Always set both. Without `ignoreUntil` the exception never expires.
-- Keep `ignoreUntil` within 90 days of the change that adds it.
-- Put `osv-scanner.toml` behind CODEOWNERS, next to `golden.toml`. The change's own file is what
-  the scan reads, so a pull request that adds an exception for a vulnerability it introduces
-  passes the gate. Review is the control.
+- `golden policy check` (the first step of every run) rejects an `[[IgnoredVulns]]` entry with
+  no `id`, no `reason`, no `ignoreUntil`, or an `ignoreUntil` more than 90 days ahead. It lists
+  every exception in the job summary.
+- **A change never grades itself.** On pull requests and in the merge queue, `security.yml` reads
+  every `osv-scanner.toml` from the base commit, so a pull request cannot except a vulnerability
+  it introduces. An exception it adds applies after merge, and an annotation says so.
+- Put `osv-scanner.toml` behind CODEOWNERS, next to `golden.toml` (this repository uses
+  `**/osv-scanner.toml`).
 - `[[PackageOverrides]]` (`ignore = true`, `effectiveUntil = ...`) silences findings too. Review
   it the same way.
 - An invalid file is ignored with an error, so its exceptions stop applying and the vulnerabilities

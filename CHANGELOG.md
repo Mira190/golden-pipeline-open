@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+Second-person rules:
+
+- The test-presence opt-out label counts only when someone other than the PR author applied it,
+  and only when that can be verified (`golden.optout`). A self-applied or unverifiable label is
+  ignored with a warning, and the gate stays enforced.
+
+Signals and hermeticity:
+
+- The Python default test and flake commands use pytest-timeout 2.5.0 with `--timeout=300`, so a
+  hung test fails with a stack trace instead of using up the job timeout.
+- The plan job reports `change-size`, the lines a reviewer must read. Above 400 lines it adds a
+  non-blocking warning that suggests splitting the PR.
+- `scripts/drill.py` has a `forged-coverage` scenario: a conftest rewrites `coverage.xml`. Diff
+  coverage is fooled by design, and the drill proves that mutation testing still blocks.
+
 Verify before you deploy (SLSA: consumers must be able to validate provenance):
 
 - New `actions/verify-image` composite action and `templates/deploy-verify.yml`. A deploy job
@@ -23,6 +38,13 @@ Vulnerability gate, diff-aware (the Google OSV model):
   advisories against merged code surface; see docs/configuration.md.
 - A scan that fails or writes no readable results fails the gate instead of reading as "no new
   vulnerabilities". Results live under `.git/`, so a pull request cannot supply them.
+- A change never grades its own vulnerability exceptions: on pull requests and in the merge
+  queue, every `osv-scanner.toml` is read from the base commit, so a PR cannot except a
+  vulnerability it introduces. `golden policy check` enforces what OSV-Scanner leaves optional:
+  each `[[IgnoredVulns]]` entry needs an `id`, a `reason` and an `ignoreUntil` at most 90 days
+  ahead. The policy summary lists the exceptions, and CODEOWNERS covers `**/osv-scanner.toml`.
+- A daily `schedule` trigger in the templates, the README snippet and `ci.yml` runs the whole
+  pipeline on the default branch, so new advisories and flaky tests surface there first.
 
 Weakening a test is gated:
 

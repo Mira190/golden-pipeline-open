@@ -140,10 +140,15 @@ jobs:
             --format=json
             --output-file=.git/osv-results/old-results.json
             ${{ inputs.working-directory }}
-      - name: Check out this change again
+      # A change never grades itself: vulnerability exceptions (osv-scanner.toml)
+      # are read from the base commit, so a pull request cannot except a
+      # vulnerability it introduces. An exception it adds applies after a code
+      # owner merges it, exactly like a golden.toml waiver.
+      - name: Check out this change again, with the base commit's exceptions
         if: env.DIFF_MODE == 'true'
         env:
           HEAD_SHA: ${{ steps.base.outputs.head }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
         run: |
           set -euo pipefail
           if [ -z "$HEAD_SHA" ]; then
@@ -151,6 +156,17 @@ jobs:
             exit 1
           fi
           git checkout --quiet --force --detach "$HEAD_SHA"
+          while IFS= read -r -d '' file; do
+            if git diff --quiet "$BASE" HEAD -- "$file"; then
+              continue
+            fi
+            echo "::notice file=$file::Exceptions are read from the base commit; this change to them applies after merge."
+            if git cat-file -e "$BASE:$file" 2> /dev/null; then
+              git show "$BASE:$file" > "$file"
+            else
+              rm -f -- "$file"
+            fi
+          done < <(git ls-files -z -- ':(glob)**/osv-scanner.toml')
       - name: Scan this change (OSV)
         id: scan-head
         if: env.DIFF_MODE == 'true'

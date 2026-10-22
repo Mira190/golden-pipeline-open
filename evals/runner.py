@@ -74,6 +74,8 @@ class Scenario:
     delete: list[str] = field(default_factory=list)
     workdir: str = "."
     labels: list[str] = field(default_factory=list)
+    # Extra keys for the simulated event payload; `pull_request` is merged, not replaced.
+    event: dict[str, Any] = field(default_factory=dict)
     inputs: dict[str, Any] | None = None
     flake: int = 0  # >0: run pytest on the selected changed tests this many times
     known_gap: str = ""
@@ -159,7 +161,12 @@ def _env(s: Scenario, tmp: Path, values: dict[str, str]) -> dict[str, str]:
         if k not in SCRUB and not k.startswith(("RUNNER_", "PYTEST_", "COV_CORE_", "MUTMUT_"))
     }
     labels = [{"name": n} for n in s.labels]
-    event = {"pull_request": {"base": {"sha": values["base"]}, "labels": labels}}
+    event: dict[str, Any] = {**s.event}
+    event["pull_request"] = {
+        **s.event.get("pull_request", {}),
+        "base": {"sha": values["base"]},
+        "labels": labels,
+    }
     (tmp / "event.json").write_text(json.dumps(event), encoding="utf-8")
     env |= {
         "GITHUB_EVENT_NAME": "pull_request",
