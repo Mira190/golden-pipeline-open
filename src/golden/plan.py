@@ -154,7 +154,7 @@ def changes(language: str, base: str, policy: Policy) -> dict[str, str]:
     preset = presets.get(language)
     changed = gitdiff.changed_files(base)
     sources = [p for p in changed if preset.is_source(p) and not match_any(p, policy.exempt)]
-    tests = [p for p in changed if preset.is_test(p)]
+    tests = [p for p in changed if preset.is_runnable_test(p)]
     lines = gitdiff.changed_lines(base)
     targets = sorted(
         {

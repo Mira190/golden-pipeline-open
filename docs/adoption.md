@@ -78,7 +78,44 @@ Diffs, reports, artifact names, cache keys and annotations are all scoped by dir
 each `<job> / golden` check, or add one aggregating job of your own (see this repository's
 `ci.yml`). Each project can carry its own `golden.toml`.
 
-## 5. Containers and progressive delivery
+## 5. Shift left: the same verdict before you push
+
+A red pipeline after a 10-minute wait is the most expensive place to learn about a problem.
+`golden local` runs the effective commands and gates from `golden.yml` on your machine, against
+the merge-base with the default branch. It runs the same code, so it reaches the same verdict:
+
+```bash
+uvx --from git+https://github.com/Mira190/golden-pipeline-open@<sha> golden local --language python
+golden local --language node --fast      # policy, format, lint, types: seconds
+golden local --language go --mutation    # also the mutation gate on changed code
+golden local --language python --dry-run # show the commands without running them
+```
+
+It reads overrides from `--set key=value`, or from `GOLDEN_INPUTS` (the same JSON the workflow
+passes), so a customised `test-command` behaves the same locally.
+
+To run it automatically, use [pre-commit](https://pre-commit.com) with `rev:` set to the same SHA
+your `ci.yml` pins:
+
+```yaml
+# .pre-commit-config.yaml
+repos:
+  - repo: https://github.com/Mira190/golden-pipeline-open
+    rev: <40-char-sha> # v1.x.y, same as ci.yml
+    hooks:
+      - id: golden-policy
+      - id: golden-fast
+        args: [--language, python]
+      - id: golden-full # pre-push: tests and diff gates
+        args: [--language, python]
+```
+
+**Coding agents.** Code written by agents goes through the same gates. Tell the agent to run
+`golden local` before it pushes, for example in an `AGENTS.md` or `CLAUDE.md` (see this
+repository's own `AGENTS.md`). The agent then gets the pipeline's verdict while it still has the
+context to fix it.
+
+## 6. Containers and progressive delivery
 
 Add `container.yml` for services that ship as images:
 
@@ -113,7 +150,7 @@ first), bake times that grow with exposure, and *no exempt change types*: config
 go through the same rings. That is the lesson of the July 2024 CrowdStrike outage. The deployment
 mechanism is environment-specific, so this repository stops at a verifiable artifact.
 
-## 6. Customising commands
+## 7. Customising commands
 
 Any step can be replaced without forking:
 

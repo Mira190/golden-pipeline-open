@@ -58,8 +58,10 @@ Controls:
   (`contents: read` for almost all).
 - Reusable workflows can only *reduce* the caller's token, never raise it.
 - No `secrets: inherit`.
-- Only `container.yml`'s publish job writes (packages, attestations, OIDC), and only on pushes to
-  the default branch.
+- Write scopes are confined to release paths: `container.yml`'s publish job (packages,
+  attestations, OIDC) on pushes to the default branch, and this repository's `release.yml`
+  (contents, attestations, OIDC) on version tags. The only other write is `security-events` for
+  CodeQL and OpenSSF Scorecard uploads.
 
 ### Cache poisoning
 
@@ -72,8 +74,10 @@ Controls:
 
 - The publish job builds with `no-cache: true` and restores nothing.
 - PR caches are scoped to the PR ref and are not visible to the default branch.
-- The only cache the pipeline *reads* on PRs is the coverage baseline. It holds a single number
-  and is written only on default-branch pushes.
+- On PRs the pipeline reads the coverage baseline (a single number) and the uv, Go and
+  golangci-lint dependency caches. All of them are written only by default-branch runs, which
+  PRs can read but never write. Release jobs (`container.yml` publish, `release.yml`) restore no
+  cache at all.
 
 ### Malicious package versions
 
@@ -128,7 +132,8 @@ pinning one SHA pins both.
 
 ## Runner hardening
 
-Every job starts with `step-security/harden-runner`, defaulting to `egress-policy: audit` so it
+Every job that checks out code starts with `step-security/harden-runner` (the verdict jobs only
+run `jq` over their `needs`), defaulting to `egress-policy: audit` so it
 can be adopted without an allowlist. Teams that collect a baseline should switch to `block` with
 an allowlist (input `egress-policy`). harden-runner is free for public repositories on
 GitHub-hosted runners. It's defence in depth, not a boundary: DNS-based block-mode bypasses were

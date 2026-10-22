@@ -8,6 +8,8 @@ with a reason, which turns that gate into report-only until it expires.
 from __future__ import annotations
 
 import datetime as dt
+import math
+import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -15,6 +17,10 @@ from typing import Any
 
 GATES = ("diff-coverage", "coverage-ratchet", "test-presence", "mutation", "scorecard")
 MAX_WAIVER_DAYS = 90
+# An exemption that names no directory or file stem ("**", "*.py", "**/*")
+# switches test presence and mutation off for a whole language: that is a
+# waiver without a reason or expiry, so it is rejected.
+BLANKET_EXEMPT = re.compile(r"^(\*\*/)*\*{1,2}(\.[^/*]+)?$")
 
 
 class PolicyError(ValueError):
@@ -28,6 +34,8 @@ class Bound:
     higher_is_stricter: bool = True
 
     def check(self, key: str, value: float) -> None:
+        if not math.isfinite(value):
+            raise PolicyError(f"{key} must be a finite number")
         weaker = value < self.floor if self.higher_is_stricter else value > self.floor
         if weaker:
             relation = ">=" if self.higher_is_stricter else "<="
@@ -74,11 +82,14 @@ def _parse_waivers(raw: dict[str, Any], today: dt.date) -> dict[str, Waiver]:
     for gate, spec in raw.items():
         if gate not in GATES:
             raise PolicyError(f"waiver for unknown gate {gate!r}; gates are {', '.join(GATES)}")
+        if not isinstance(spec, dict):
+            raise PolicyError(f"[waivers.{gate}] must be a table with reason and expires")
         reason = str(spec.get("reason", "")).strip()
         expires = spec.get("expires")
         if not reason:
             raise PolicyError(f"waiver for {gate} needs a reason")
-        if not isinstance(expires, dt.date):
+        # TOML datetimes are dates too (dt.datetime subclasses dt.date).
+        if not isinstance(expires, dt.date) or isinstance(expires, dt.datetime):
             raise PolicyError(f"waiver for {gate} needs `expires = YYYY-MM-DD`")
         if (expires - today).days > MAX_WAIVER_DAYS:
             raise PolicyError(f"waiver for {gate} may last at most {MAX_WAIVER_DAYS} days")
@@ -86,13 +97,29 @@ def _parse_waivers(raw: dict[str, Any], today: dt.date) -> dict[str, Waiver]:
     return waivers
 
 
-def from_mapping(data: dict[str, Any], today: dt.date | None = None) -> Policy:
-    today = today or dt.datetime.now(dt.UTC).date()
+def _check_shape(data: dict[str, Any]) -> None:
+    """Every section is a table and every key is known: a typo must not keep a default."""
     known_sections = {k.split(".")[0] for k in BOUNDS} | {"presence", "waivers"}
     unknown = set(data) - known_sections
     if unknown:
         raise PolicyError(f"unknown section(s): {', '.join(sorted(unknown))}")
+    known_keys: dict[str, set[str]] = {"presence": {"exempt"}}
+    for key in BOUNDS:
+        section, name = key.split(".")
+        known_keys.setdefault(section, set()).add(name)
+    for section, keys in known_keys.items():
+        table = data.get(section, {})
+        if not isinstance(table, dict):
+            raise PolicyError(f"[{section}] must be a table")
+        if typos := set(table) - keys:
+            raise PolicyError(f"unknown key(s) in [{section}]: {', '.join(sorted(typos))}")
+    if not isinstance(data.get("waivers", {}), dict):
+        raise PolicyError("[waivers] must be a table")
 
+
+def from_mapping(data: dict[str, Any], today: dt.date | None = None) -> Policy:
+    today = today or dt.datetime.now(dt.UTC).date()
+    _check_shape(data)
     values: dict[str, float] = {}
     for key, bound in BOUNDS.items():
         section, name = key.split(".")
@@ -105,6 +132,11 @@ def from_mapping(data: dict[str, Any], today: dt.date | None = None) -> Policy:
     exempt = data.get("presence", {}).get("exempt", [])
     if not isinstance(exempt, list) or not all(isinstance(e, str) for e in exempt):
         raise PolicyError("presence.exempt must be a list of glob strings")
+    if blanket := [e for e in exempt if BLANKET_EXEMPT.match(e.strip().lstrip("/"))]:
+        raise PolicyError(
+            f"presence.exempt {blanket} would exempt every file; name the directories or files, "
+            "or use a time-boxed [waivers.test-presence]"
+        )
     return Policy(values, tuple(exempt), _parse_waivers(data.get("waivers", {}), today))
 
 

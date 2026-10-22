@@ -24,9 +24,16 @@ class Preset:
     sources: tuple[str, ...]
     tests: tuple[str, ...]
     ignore: tuple[str, ...] = field(default=())
+    # Test files the runner collects by default. Other test files (conftest.py,
+    # fixtures, helpers) count for test presence but cannot be re-run on their
+    # own: pytest exits 5 and Vitest exits 1 when handed only those.
+    runnable: tuple[str, ...] = field(default=())
 
     def is_test(self, path: str) -> bool:
         return match_any(path, self.tests)
+
+    def is_runnable_test(self, path: str) -> bool:
+        return self.is_test(path) and match_any(path, self.runnable)
 
     def is_source(self, path: str) -> bool:
         return (
@@ -125,6 +132,7 @@ PRESETS: dict[str, Preset] = {
         name="python",
         sources=("*.py",),
         tests=("test_*.py", "*_test.py", "tests/**/*.py", "conftest.py"),
+        runnable=("test_*.py", "*_test.py"),
         ignore=(
             "**/migrations/**",
             "docs/**",
@@ -139,6 +147,7 @@ PRESETS: dict[str, Preset] = {
         name="node",
         sources=(f"*.{JS_EXT}",),
         tests=(f"*.test.{JS_EXT}", f"*.spec.{JS_EXT}", "**/__tests__/**", "test/**", "tests/**"),
+        runnable=(f"*.test.{JS_EXT}", f"*.spec.{JS_EXT}"),
         ignore=(
             "*.d.ts",
             "*.config.*",
@@ -155,6 +164,7 @@ PRESETS: dict[str, Preset] = {
         name="go",
         sources=("*.go",),
         tests=("*_test.go",),
+        runnable=("*_test.go",),
         ignore=("vendor/", "*.pb.go", "*_gen.go", "zz_generated*.go", "mock_*.go", "testdata/"),
     ),
 }

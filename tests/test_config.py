@@ -115,3 +115,47 @@ def test_load_invalid_toml(tmp_path):
     path.write_text("[mutation\n")
     with pytest.raises(config.PolicyError, match=r"golden\.toml"):
         config.load(path, TODAY)
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_values_must_be_finite(value):
+    with pytest.raises(config.PolicyError, match="finite"):
+        load({"mutation": {"min_score": value}})
+
+
+@pytest.mark.parametrize(
+    ("data", "message"),
+    [
+        ({"coverage": 5}, r"\[coverage\] must be a table"),
+        ({"presence": ["x"]}, r"\[presence\] must be a table"),
+        ({"waivers": "x"}, r"\[waivers\] must be a table"),
+        ({"waivers": {"mutation": "x"}}, r"\[waivers.mutation\] must be a table"),
+        ({"mutation": {"min_scor": 95}}, r"unknown key\(s\) in \[mutation\]: min_scor"),
+        ({"presence": {"exclude": []}}, r"unknown key\(s\) in \[presence\]: exclude"),
+    ],
+)
+def test_malformed_sections_are_rejected(data, message):
+    with pytest.raises(config.PolicyError, match=message):
+        load(data)
+
+
+def test_waiver_expiry_must_be_a_date_not_a_datetime():
+    with pytest.raises(config.PolicyError, match="needs `expires"):
+        load(waiver(expires=dt.datetime(2026, 11, 1, tzinfo=dt.UTC)))
+
+
+def test_waiver_may_last_exactly_90_days():
+    assert load(waiver(expires=TODAY + dt.timedelta(days=90))).waivers["mutation"]
+    with pytest.raises(config.PolicyError, match="at most 90 days"):
+        load(waiver(expires=TODAY + dt.timedelta(days=91)))
+
+
+@pytest.mark.parametrize("glob", ["**", "*", "**/*", "*.py", "**/*.ts", "/**/*.go", " * "])
+def test_blanket_exemptions_are_rejected(glob):
+    with pytest.raises(config.PolicyError, match="would exempt every file"):
+        load({"presence": {"exempt": [glob]}})
+
+
+@pytest.mark.parametrize("glob", ["src/generated/**", "*_pb2.py", "**/legacy_adapter.py", "gen/*"])
+def test_targeted_exemptions_are_allowed(glob):
+    assert load({"presence": {"exempt": [glob]}}).exempt == (glob,)

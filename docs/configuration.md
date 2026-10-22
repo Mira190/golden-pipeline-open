@@ -20,9 +20,13 @@ There are two layers:
 The policy is validated in the first job (`golden policy check`), and the effective values are
 printed to the job summary:
 
-- Unknown sections fail validation.
-- Non-numeric values fail validation.
+- Unknown sections fail validation, and so do unknown keys inside a known section, so a typo
+  such as `min_scor = 95` can't silently keep the default.
+- Values that aren't finite numbers fail validation (`nan` and `inf` included).
 - Any value weaker than its floor fails with an explanation.
+- `presence.exempt` globs must name something: `**`, `*`, `**/*` and bare extension globs such
+  as `*.py` would exempt a whole language. They are rejected, and a time-boxed
+  `[waivers.test-presence]` is the way to switch the gate off.
 
 ```toml
 [coverage]
@@ -50,7 +54,7 @@ expires = 2026-12-31
 
 - Allowed gates: `diff-coverage`, `coverage-ratchet`, `test-presence`, `mutation`, `scorecard`.
 - `reason` is required.
-- `expires` is a TOML date at most **90 days** ahead.
+- `expires` is a TOML date (not a date-time) at most **90 days** ahead.
 - After expiry the gate is enforced again automatically.
 - While any waiver is active, the scorecard cannot reach L4.
 
@@ -72,6 +76,7 @@ expires = 2026-12-31
 | `mutation-report` / `mutation-format` | per language | format: `mutmut`, `stryker`, `gremlins` |
 | `mutation` | `true` | set `false` to skip mutation testing (a waiver is usually better) |
 | `security` | `true` | run the nested security workflow |
+| `workflow-lint` | `true` | lint `.github/workflows` with actionlint and shellcheck (in `security`) |
 | `skip-presence-label` | `no-tests-needed` | PR label that makes test presence report-only |
 | `runs-on` | `ubuntu-24.04` | runner label |
 | `egress-policy` | `audit` | harden-runner policy; `block` needs an allowlist |

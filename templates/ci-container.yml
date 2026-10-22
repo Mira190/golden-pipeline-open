@@ -3,11 +3,17 @@ name: ci
 
 on:
   pull_request:
+    # labeled/unlabeled: the test-presence opt-out label takes effect at once.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   push:
     branches: [main]
   merge_group:
 
 permissions: {}
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   ci:
@@ -33,6 +39,7 @@ jobs:
     if: always()
     needs: [ci, image]
     runs-on: ubuntu-24.04
+    timeout-minutes: 2
     permissions: {}
     steps:
       - env:

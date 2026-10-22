@@ -189,3 +189,22 @@ def test_go_references_same_package(source, test, expected):
 )
 def test_go_mutation_target_is_the_package(source, expected):
     assert GO.mutation_targets(source, [(1, 1)], "") == [expected]
+
+
+@pytest.mark.parametrize(
+    ("preset", "path", "runnable"),
+    [
+        ("python", "tests/test_a.py", True),
+        ("python", "pkg/a_test.py", True),
+        ("python", "tests/conftest.py", False),
+        ("python", "tests/helpers.py", False),
+        ("python", "src/test_like_name.py", True),
+        ("node", "src/a.spec.tsx", True),
+        ("node", "test/setup.ts", False),
+        ("node", "src/a.ts", False),
+        ("go", "p/p_test.go", True),
+        ("go", "p/p.go", False),
+    ],
+)
+def test_runnable_tests(preset, path, runnable):
+    assert presets.get(preset).is_runnable_test(path) is runnable

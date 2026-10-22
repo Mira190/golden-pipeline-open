@@ -191,3 +191,44 @@ def test_rules_from_env(monkeypatch):
     monkeypatch.setenv("GOLDEN_DEFAULT_BRANCH", "main")
     monkeypatch.setattr(sc, "fetch_rules", lambda repo, branch, token: [{"type": repo + branch}])
     assert sc.rules_from_env() == [{"type": "o/rmain"}]
+
+
+@pytest.mark.parametrize(
+    ("on", "expected"),
+    [
+        ("on:\n  pull_request:\n", True),
+        ("on: [push, pull_request]\n", True),
+        ("on:\n  - pull_request\n", True),
+        ("on:\n  pull_request_target:\n", False),
+        ("on: push  # pull_request later\n", False),
+        ("on: push\nif: github.event_name == 'pull_request'\n", False),
+    ],
+)
+def test_runs_on_prs_needs_a_real_trigger(tmp_path, on, expected):
+    workflow = f"{on}jobs:\n  g:\n    uses: o/golden-pipeline/.github/workflows/golden.yml@{PIN}\n"
+    r = repo(tmp_path, {".github/workflows/ci.yml": workflow})
+    assert sc.runs_on_prs(r) is expected
+
+
+def test_mentions_in_comments_satisfy_no_control(tmp_path):
+    workflow = (
+        "# uses o/golden-pipeline/.github/workflows/golden.yml and container.yml\n"
+        "# - uses: actions/attest-build-provenance@v4\n"
+        "on: pull_request\npermissions: {}\njobs: {}\n"
+    )
+    r = repo(tmp_path, {".github/workflows/ci.yml": workflow})
+    assert not sc.uses_golden(r)
+    assert not sc.provenance(r)
+
+
+@pytest.mark.parametrize(
+    "step",
+    [
+        f"      - uses: actions/attest-build-provenance@{PIN}\n",
+        f"      - uses: actions/attest@{PIN}\n",
+        f"    uses: o/golden-pipeline-open/.github/workflows/container.yml@{PIN}\n",
+    ],
+)
+def test_provenance_from_a_real_step(tmp_path, step):
+    r = repo(tmp_path, {".github/workflows/release.yml": "jobs:\n  r:\n    steps:\n" + step})
+    assert sc.provenance(r)

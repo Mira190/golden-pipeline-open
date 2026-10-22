@@ -127,7 +127,9 @@ def test_diff_coverage_reports_tool_failure(repo, feature, capsys):
 def test_ratchet_cycle(repo, capsys):
     cobertura(repo, {1, 2, 3})
     assert cli.main(["ratchet", "coverage.xml", "--baseline", "base.json"]) == 0
-    assert "no baseline yet" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "no baseline yet" in out
+    assert "::warning::coverage ratchet skipped: no default-branch baseline" in out
     assert cli.main(["ratchet", "coverage.xml", "--write-baseline", "base.json", "--sha", "s"]) == 0
     assert "baseline saved (75%)" in capsys.readouterr().out
     cobertura(repo, {1, 2})
@@ -336,3 +338,72 @@ def test_diff_coverage_failure_when_tool_exits_nonzero(repo, monkeypatch, capsys
     monkeypatch.setattr(cli.subprocess, "run", run)
     assert cli.main(["diff-coverage", "--base", "x", "coverage.xml"]) == 1
     assert "#### ❌ Diff coverage: failed" in capsys.readouterr().out
+
+
+def test_mutation_without_any_verdict_fails(repo, capsys):
+    mutants = [{"status": "CompileError", "location": {"start": {"line": 1}}}]
+    (repo.root / "m.json").write_text(json.dumps({"files": {"a.ts": {"mutants": mutants}}}))
+    assert cli.main(["mutation", "m.json", "--format", "stryker"]) == 1
+    assert "1 mutants in the changed code got no verdict" in capsys.readouterr().out
+
+
+def test_interrupted_mutmut_run_is_an_error(repo, capsys):
+    (repo.root / "s.json").write_text(json.dumps({"killed": 9, "check_was_interrupted_by_user": 2}))
+    assert cli.main(["mutation", "s.json", "--format", "mutmut"]) == 2
+    assert "interrupted" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("content", ["", "TN:\nend_of_record\n"])
+def test_ratchet_rejects_a_report_without_coverable_lines(repo, capsys, content):
+    (repo.root / "lcov.info").write_text(content)
+    assert cli.main(["ratchet", "lcov.info", "--write-baseline", "base.json"]) == 2
+    assert "no coverable lines" in capsys.readouterr().out
+    assert not (repo.root / "base.json").exists()
+
+
+def test_ratchet_rejects_a_malformed_baseline(repo, capsys):
+    cobertura(repo, {1, 2, 3})
+    (repo.root / "base.json").write_text('{"sha": "x"}')
+    assert cli.main(["ratchet", "coverage.xml", "--baseline", "base.json"]) == 2
+    assert "baseline base.json is malformed" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "toml",
+    [
+        "coverage = 5\n",
+        "[waivers]\nmutation = 'x'\n",
+        "[waivers.mutation]\nreason = 'r'\nexpires = 2026-11-01T00:00:00\n",
+        "[coverage]\ndiff_min = nan\n",
+    ],
+)
+def test_malformed_policy_exits_2_without_traceback(repo, capsys, toml):
+    (repo.root / "golden.toml").write_text(toml)
+    assert cli.main(["policy", "check"]) == 2
+    assert "::error::golden policy:" in capsys.readouterr().out
+
+
+def test_diff_coverage_with_preset_passes_when_every_source_is_measured(repo, feature, capsys):
+    cobertura(repo, {1, 2, 3, 4})
+    assert cli.main(["diff-coverage", "--base", feature, "--preset", "python", "coverage.xml"]) == 0
+
+
+def test_diff_coverage_fails_on_a_module_missing_from_the_report(repo, feature, capsys):
+    # pytest-cov without `source` only reports imported modules: an untested
+    # new module is absent from the report, and diff-cover alone calls it 100%.
+    repo.commit({"pkg/untested.py": "def f():\n    return 1\n", "notes.md": "x\n"})
+    cobertura(repo, {1, 2, 3, 4})
+    assert cli.main(["diff-coverage", "--base", feature, "coverage.xml"]) == 0
+    capsys.readouterr()
+    assert cli.main(["diff-coverage", "--base", feature, "--preset", "python", "coverage.xml"]) == 1
+    out = capsys.readouterr().out
+    assert "::error file=pkg/untested.py::changed file is missing from the coverage report" in out
+    assert "- `pkg/untested.py`" in out
+    assert "notes.md" not in out.split("<details>")[0]
+
+
+def test_diff_coverage_unmeasured_respects_exemptions(repo, feature, capsys):
+    repo.commit({"gen/model.py": "X = 1\n"})
+    (repo.root / "golden.toml").write_text('[presence]\nexempt = ["gen/**"]\n')
+    cobertura(repo, {1, 2, 3, 4})
+    assert cli.main(["diff-coverage", "--base", feature, "--preset", "python", "coverage.xml"]) == 0

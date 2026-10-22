@@ -85,12 +85,20 @@ def _all_text(repo: Repo) -> str:
     return "\n".join(repo.workflows().values())
 
 
+def _uses(repo: Repo) -> list[str]:
+    """Every `uses:` reference; a mention in a comment or string satisfies no control."""
+    return USES.findall(_all_text(repo))
+
+
 def runs_on_prs(repo: Repo) -> bool:
-    return re.search(r"^\s*pull_request\s*:?", _all_text(repo), re.MULTILINE) is not None
+    # `pull_request:` or `[push, pull_request]`, but not `pull_request_target` or a comment.
+    code = re.sub(r"(^|\s)#.*$", "", _all_text(repo), flags=re.MULTILINE)
+    # Quotes and dots exclude expressions like `github.event_name == 'pull_request'`.
+    return re.search(r"(?<![\w.'\"])pull_request(?![\w.'\"-])", code) is not None
 
 
 def uses_golden(repo: Repo) -> bool:
-    return GOLDEN_WORKFLOW.search(_all_text(repo)) is not None
+    return any(GOLDEN_WORKFLOW.search(u) for u in _uses(repo))
 
 
 def has_lockfile(repo: Repo) -> bool:
@@ -123,7 +131,7 @@ def dependency_cooldown(repo: Repo) -> bool:
 
 
 def actions_pinned(repo: Repo) -> bool:
-    refs = [u for u in USES.findall(_all_text(repo)) if not u.startswith(("./", "$/", "docker://"))]
+    refs = [u for u in _uses(repo) if not u.startswith(("./", "$/", "docker://"))]
     return all(SHA_REF.search(u) for u in refs)
 
 
@@ -133,8 +141,10 @@ def least_privilege(repo: Repo) -> bool:
 
 
 def provenance(repo: Repo) -> bool:
-    text = _all_text(repo)
-    return "container.yml" in text or "actions/attest" in text
+    return any(
+        "/.github/workflows/container.yml" in u or u.startswith("actions/attest")
+        for u in _uses(repo)
+    )
 
 
 def ossf_scorecard(repo: Repo) -> bool:

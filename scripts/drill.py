@@ -207,7 +207,19 @@ def scenario(language: str, name: str, workdir: Path) -> dict[str, bool]:
     if sh(cmds["test-command"], project) != 0:
         raise RuntimeError(f"{language}/{name}: tests failed to run")
     results["diff-coverage"] = (
-        sh([*GOLDEN, "diff-coverage", "--base", base, cmds["coverage-report"]], project) == 0
+        sh(
+            [
+                *GOLDEN,
+                "diff-coverage",
+                "--base",
+                base,
+                "--preset",
+                language,
+                cmds["coverage-report"],
+            ],
+            project,
+        )
+        == 0
     )
     results["presence"] = (
         sh([*GOLDEN, "presence", "--base", base, "--preset", language], project) == 0

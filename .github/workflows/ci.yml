@@ -5,6 +5,8 @@ name: ci
 
 on:
   pull_request:
+    # labeled/unlabeled: the test-presence opt-out label takes effect at once.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   push:
     branches: [main]
   merge_group:
@@ -34,6 +36,8 @@ jobs:
     with:
       language: python
       working-directory: examples/python
+      # golden-cli already scans the whole repository (examples included) once.
+      security: false
 
   example-node:
     uses: $/.github/workflows/golden.yml
@@ -42,6 +46,8 @@ jobs:
     with:
       language: node
       working-directory: examples/node
+      # golden-cli already scans the whole repository (examples included) once.
+      security: false
 
   example-go:
     uses: $/.github/workflows/golden.yml
@@ -50,8 +56,13 @@ jobs:
     with:
       language: go
       working-directory: examples/go
+      # golden-cli already scans the whole repository (examples included) once.
+      security: false
 
+  # Publishes from main, so it must wait for every gate: an image is never
+  # pushed from a commit the pipeline rejected.
   example-container:
+    needs: [golden-cli, example-python, example-node, example-go, drills]
     uses: $/.github/workflows/container.yml
     permissions:
       contents: read
@@ -62,31 +73,6 @@ jobs:
       context: examples/python
       image: golden-pipeline-example
       smoke-command: test "$(docker run --rm "$IMAGE" 1000x2)" = "subtotal=2000 discount=0 shipping=800 total=2800"
-
-  workflow-lint:
-    name: workflow lint
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
-        with:
-          egress-policy: audit
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: "1.26"
-          cache: false
-      # actionlint 1.7.12 predates the `$/` self-repository syntax (2026-07);
-      # zizmor (in golden-security) understands it and audits these files too.
-      - name: actionlint
-        run: >-
-          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
-          -ignore 'specifying action "\$/'
-          -ignore 'reusable workflow call "\$/'
 
   # Evaluate the evaluator: replay "no tests / weak test / real tests" for each
   # language through the real gates and assert every verdict.
@@ -121,7 +107,7 @@ jobs:
   ci:
     name: ci
     if: always()
-    needs: [golden-cli, example-python, example-node, example-go, example-container, workflow-lint, drills]
+    needs: [golden-cli, example-python, example-node, example-go, example-container, drills]
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     permissions: {}

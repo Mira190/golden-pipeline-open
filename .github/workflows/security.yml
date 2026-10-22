@@ -17,6 +17,10 @@ on:
         description: dependency-review threshold (low, moderate, high, critical).
         type: string
         default: high
+      workflow-lint:
+        description: Lint workflows for correctness with actionlint (and shellcheck on run blocks).
+        type: boolean
+        default: true
       allow-licenses:
         description: Comma-separated SPDX allowlist for new dependencies (empty = no licence gate).
         type: string
@@ -96,6 +100,18 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # zizmor finds security problems; actionlint finds bugs: bad expressions,
+      # unknown inputs, and shellcheck findings in `run:` blocks. Image pinned by
+      # digest (it bundles shellcheck), like gitleaks above.
+      - name: Lint GitHub Actions workflows (actionlint + shellcheck)
+        if: inputs.workflow-lint && hashFiles('.github/workflows/*.yml', '.github/workflows/*.yaml') != ''
+        env:
+          IMAGE: rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+        # actionlint 1.7.12 predates the `$/` self-repository syntax (2026-07).
+        run: >-
+          docker run --rm -v "$PWD:/repo:ro" --workdir /repo "$IMAGE" -color
+          -ignore 'specifying action "\$/'
+          -ignore 'reusable workflow call "\$/'
       - name: Audit GitHub Actions workflows (zizmor)
         uses: zizmorcore/zizmor-action@85b2b9fb8e3325e7a23d7d0a9d7ba5ae0f999e3e # v0.7.1
         with:

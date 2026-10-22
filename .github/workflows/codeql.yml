@@ -4,10 +4,16 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Merge-queue commits need results too when a ruleset requires code scanning.
+  merge_group:
   schedule:
     - cron: "23 4 * * 1"
 
 permissions: {}
+
+concurrency:
+  group: codeql-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   analyze:
@@ -22,6 +28,9 @@ jobs:
       matrix:
         language: [actions, python, javascript-typescript, go]
     steps:
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
