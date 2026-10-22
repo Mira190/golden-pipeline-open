@@ -61,13 +61,13 @@ The same scenarios, run against the code before and after the hardening in this 
 
 | | Scenarios | Correct | Escapes | False blocks | Robustness failures | Crashes | Known gaps |
 |---|---|---|---|---|---|---|---|
-| v1.0.0 (initial release) | 92 | 30 | **30** | **18** | **13** | 7 | 1 |
-| now | 92 | 91 | 0 | 0 | 0 | 0 | 1 |
+| v1.0.0 (initial release) | 94 | 31 | **30** | **19** | **13** | 7 | 1 |
+| now | 94 | 93 | 0 | 0 | 0 | 0 | 1 |
 
 Crashes are robustness failures too, so they are counted in both columns.
 
-16 of v1.0.0's 61 wrong decisions come from controls it doesn't have, such as test-weakening
-scope, the self-gating warning and owned OSV exceptions. The other 45 are defects in gates it
+17 of v1.0.0's 62 wrong decisions come from controls it doesn't have, such as test-weakening
+scope, the self-gating warning, owned OSV exceptions and the arid-line filter. The other 45 are defects in gates it
 already shipped. [Value](../docs/value.md#1-the-right-merge-decision) breaks them down.
 
 The worst escapes before the hardening, all now closed:

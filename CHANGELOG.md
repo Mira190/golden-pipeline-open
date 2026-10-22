@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+Mutation testing:
+
+- `golden mutation` drops mutants on arid lines from Stryker, mutation-testing-elements and gremlins
+  reports before scoring, and reports how many it dropped. An arid line is a single logging or
+  debug call whose arguments only name values. `--no-arid-filter` turns the filter off. A log
+  call that wraps another call, or a template interpolation, stays mutated, so logic can't be
+  hidden inside a log statement. Two benchmark scenarios check both directions.
+
 Static analysis on the diff:
 
 - `golden sast REPORT.sarif --base BASE` blocks on SARIF findings on the lines a change added or

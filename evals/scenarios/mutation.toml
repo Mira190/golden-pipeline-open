@@ -232,3 +232,38 @@ expect = "block"
  {"line": 4, "column": 7, "type": "CONDITIONALS_BOUNDARY", "status": "LIVED"},
  {"line": 4, "column": 7, "type": "CONDITIONALS_NEGATION", "status": "LIVED"}
 ]}]}'''
+
+[[scenario]]
+id = "mutation/arid-log-line-is-not-a-missing-test"
+gate = "mutation"
+category = "legit"
+why = "A surviving StringLiteral mutant in `console.log('applied')` is noise, not a missing assertion (Google's arid nodes). The real logic is fully killed, so the change passes and the excluded mutant is reported."
+argv = ["mutation", "reports/mutation.json", "--format", "stryker", "--base", "{base}"]
+expect = "pass"
+stdout_contains = ["1 mutants excluded as arid (logging/debug output)."]
+[scenario.base]
+"src/a.ts" = "export const a = 1;\n"
+[scenario.head]
+"src/a.ts" = "export const a = 1;\nexport function f(x: number) {\n  console.log('applied');\n  return x > 1;\n}\n"
+[scenario.artifacts]
+"reports/mutation.json" = '''{"schemaVersion": "2", "thresholds": {"high": 80, "low": 60}, "files": {"src/a.ts": {"language": "typescript", "source": "", "mutants": [
+ {"id": "1", "mutatorName": "StringLiteral", "status": "Survived", "location": {"start": {"line": 3, "column": 15}, "end": {"line": 3, "column": 24}}},
+ {"id": "2", "mutatorName": "EqualityOperator", "status": "Killed", "location": {"start": {"line": 4, "column": 10}, "end": {"line": 4, "column": 15}}}
+]}}}'''
+
+[[scenario]]
+id = "mutation/logic-inside-a-log-call-stays-mutated"
+gate = "mutation"
+category = "gaming"
+why = "Wrapping a call that does work in `console.log(...)` must not hide its mutants: only lines that merely name values are arid."
+argv = ["mutation", "reports/mutation.json", "--format", "stryker", "--base", "{base}"]
+expect = "block"
+[scenario.base]
+"src/a.ts" = "export const a = 1;\n"
+[scenario.head]
+"src/a.ts" = "export const a = 1;\nexport function f(x: number) {\n  console.log(applyDiscount(x > 100));\n  return x;\n}\n"
+[scenario.artifacts]
+"reports/mutation.json" = '''{"schemaVersion": "2", "thresholds": {"high": 80, "low": 60}, "files": {"src/a.ts": {"language": "typescript", "source": "", "mutants": [
+ {"id": "1", "mutatorName": "EqualityOperator", "status": "Survived", "location": {"start": {"line": 3, "column": 29}, "end": {"line": 3, "column": 36}}},
+ {"id": "2", "mutatorName": "ConditionalExpression", "status": "Survived", "location": {"start": {"line": 3, "column": 29}, "end": {"line": 3, "column": 36}}}
+]}}}'''

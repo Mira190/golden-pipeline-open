@@ -659,3 +659,362 @@ def test_mutation_counts_test_touched_functions_with_preset(repo, capsys):
     assert "no mutants in the changed code" in capsys.readouterr().out
     assert cli.main([*argv, "--preset", "go"]) == 1
     assert "- `p/p.go:4` CB" in capsys.readouterr().out
+
+
+# ------------------------------------------------------- arid lines (logging/debug output)
+LOGGY_TS = (
+    "const total = a + b;\n"  # 1
+    "console.log(total);\n"  # 2
+    "if (total > 10) {\n"  # 3
+    '  logger.info("big");\n'  # 4
+    "}\n"  # 5
+    "return total;\n"  # 6
+)
+ARID_NOTE = "mutants excluded as arid (logging/debug output)"
+
+
+def stryker_report(repo, *mutants, name="src/a.ts", source=LOGGY_TS):
+    """Write the source and a Stryker report: mutants are (line, status) pairs."""
+    repo.write({name: source})
+    entries = [
+        {"status": s, "mutatorName": "Eq", "location": {"start": {"line": n}}} for n, s in mutants
+    ]
+    (repo.root / "m.json").write_text(json.dumps({"files": {name: {"mutants": entries}}}))
+
+
+def test_mutation_excludes_arid_mutants_and_says_so(repo, capsys):
+    stryker_report(repo, (1, "Killed"), (2, "Survived"), (4, "Survived"), (6, "Killed"))
+    assert cli.main(["mutation", "m.json", "--format", "stryker"]) == 0
+    out = capsys.readouterr().out
+    assert "Mutation testing: passed" in out
+    assert "Score **100%** (minimum 80%): 2 killed, 0 timed out, 0 survived, 0 not covered." in out
+    assert f"2 {ARID_NOTE}." in out
+    assert "surviving mutant" not in out
+
+
+def test_mutation_arid_filter_can_be_switched_off(repo, capsys):
+    stryker_report(repo, (1, "Killed"), (2, "Survived"), (4, "Survived"), (6, "Killed"))
+    assert cli.main(["mutation", "m.json", "--format", "stryker", "--no-arid-filter"]) == 1
+    out = capsys.readouterr().out
+    assert "Score **50%**" in out
+    assert ARID_NOTE not in out
+    assert "- `src/a.ts:2` Eq" in out
+    assert "- `src/a.ts:4` Eq" in out
+
+
+def test_mutation_says_nothing_when_no_mutant_was_arid(repo, capsys):
+    stryker_report(repo, (1, "Killed"), (6, "Survived"))
+    assert cli.main(["mutation", "m.json", "--format", "stryker"]) == 1
+    out = capsys.readouterr().out
+    assert "Score **50%**" in out
+    assert "arid" not in out
+
+
+def test_mutation_only_arid_mutants_means_no_mutants_in_the_changed_code(repo, capsys):
+    stryker_report(repo, (2, "Survived"), (4, "NoCoverage"))
+    assert cli.main(["mutation", "m.json", "--format", "stryker"]) == 0
+    out = capsys.readouterr().out
+    assert "✅ Mutation testing: no mutants in the changed code" in out
+    assert f"2 {ARID_NOTE}." in out
+    assert "failed" not in out
+    assert "::warning" not in out
+
+
+def test_mutation_only_arid_mutants_without_a_verdict_is_not_inconclusive(repo, capsys):
+    stryker_report(repo, (2, "CompileError"), (4, "Ignored"))
+    assert cli.main(["mutation", "m.json", "--format", "stryker"]) == 0
+    out = capsys.readouterr().out
+    assert "no mutants in the changed code" in out
+    assert "no verdict" not in out
+
+
+def test_mutation_without_a_verdict_outside_arid_lines_still_fails(repo, capsys):
+    stryker_report(repo, (2, "Survived"), (6, "CompileError"))
+    assert cli.main(["mutation", "m.json", "--format", "stryker"]) == 1
+    out = capsys.readouterr().out
+    assert "1 mutants in the changed code got no verdict" in out
+    assert f"1 {ARID_NOTE}." in out
+
+
+def test_mutation_malformed_report_is_still_an_error_with_arid_lines(repo, capsys):
+    repo.write({"src/a.ts": LOGGY_TS})
+    mutants = [{"status": "Survived", "location": {"start": {"line": 2}}}, {"status": "Killed"}]
+    (repo.root / "m.json").write_text(json.dumps({"files": {"src/a.ts": {"mutants": mutants}}}))
+    assert cli.main(["mutation", "m.json", "--format", "stryker"]) == 2
+    assert "malformed stryker report" in capsys.readouterr().out
+
+
+def test_mutation_unreadable_source_excludes_nothing(repo, capsys):
+    stryker_report(repo, (2, "Survived"))
+    (repo.root / "src" / "a.ts").unlink()
+    assert cli.main(["mutation", "m.json", "--format", "stryker"]) == 1
+    out = capsys.readouterr().out
+    assert "- `src/a.ts:2` Eq" in out
+    assert "arid" not in out
+
+
+GO_LOGGY = (
+    "package p\n\n"
+    "func Rate(n int) int {\n"  # 3
+    '\tlog.Printf("rate %d", n)\n'  # 4
+    "\tif n > 10 {\n"  # 5
+    "\t\treturn 2\n"  # 6
+    "\t}\n"
+    '\tfmt.Println("small")\n'  # 8
+    '\t_ = fmt.Sprintf("%d", n+1)\n'  # 9
+    "\treturn 1\n"
+    "}\n"
+)
+
+
+def test_mutation_arid_filter_with_gremlins_and_a_base(repo, capsys):
+    repo.commit({"p/p.go": "package p\n"})
+    base = repo.git("rev-parse", "HEAD")
+    repo.commit({"p/p.go": GO_LOGGY})
+    mutations = [
+        {"line": line, "type": "ARITHMETIC_BASE", "status": status}
+        for line, status in [
+            (4, "LIVED"),
+            (5, "KILLED"),
+            (8, "NOT COVERED"),
+            (9, "LIVED"),
+            (99, "LIVED"),
+        ]
+    ]
+    (repo.root / "g.json").write_text(
+        json.dumps({"files": [{"file_name": "p/p.go", "mutations": mutations}]})
+    )
+    argv = ["mutation", "g.json", "--format", "gremlins", "--base", base]
+    assert cli.main(argv) == 1
+    out = capsys.readouterr().out
+    assert "Score **50%**" in out  # lines 5 and 9; line 99 is outside the file
+    assert f"2 {ARID_NOTE}." in out
+    assert "- `p/p.go:9` ARITHMETIC_BASE" in out
+    assert "p/p.go:4" not in out
+    assert "p/p.go:8" not in out
+    assert cli.main([*argv, "--no-arid-filter"]) == 1
+    out = capsys.readouterr().out
+    assert "Score **25%**" in out
+    assert "arid" not in out
+
+
+def test_mutation_arid_lines_outside_the_change_are_not_counted(repo, capsys):
+    repo.commit({"src/a.ts": LOGGY_TS})
+    base = repo.git("rev-parse", "HEAD")
+    changed = LOGGY_TS.replace("a + b", "a - b")
+    repo.commit({"src/a.ts": changed})
+    stryker_report(repo, (1, "Killed"), (2, "Survived"), (4, "Survived"), source=changed)
+    assert cli.main(["mutation", "m.json", "--format", "stryker", "--base", base]) == 0
+    out = capsys.readouterr().out
+    assert "Score **100%**" in out
+    assert "arid" not in out
+
+
+def test_mutation_arid_filter_is_on_unless_switched_off():
+    parser = cli.build_parser()
+    base = ["mutation", "m.json", "--format", "stryker"]
+    assert parser.parse_args(base).arid_filter is True
+    assert parser.parse_args([*base, "--no-arid-filter"]).arid_filter is False
+
+
+def test_mutation_arid_filter_leaves_mutmut_stats_alone(repo, capsys):
+    (repo.root / "stats.json").write_text(json.dumps({"killed": 8, "survived": 2}))
+    assert cli.main(["mutation", "stats.json", "--format", "mutmut"]) == 0
+    out = capsys.readouterr().out
+    assert "Score **80%**" in out
+    assert "arid" not in out
+
+
+# ----------------------------------------- the mutation verdict text, pinned exactly
+def mutants_report(root, statuses, name="a.ts"):
+    entries = [
+        {"status": s, "mutatorName": "Eq", "location": {"start": {"line": n}}}
+        for n, s in enumerate(statuses, start=1)
+    ]
+    (root / "m.json").write_text(json.dumps({"files": {name: {"mutants": entries}}}))
+
+
+def waive_mutation(repo):
+    expires = dt.datetime.now(dt.UTC).date() + dt.timedelta(days=30)
+    (repo.root / "golden.toml").write_text(
+        f'[waivers.mutation]\nreason = "known"\nexpires = {expires}\n'
+    )
+
+
+STRYKER = ["mutation", "m.json", "--format", "stryker"]
+
+
+def test_mutation_no_verdict_text_is_exact(repo, capsys):
+    mutants_report(repo.root, ["CompileError"])
+    assert cli.main(STRYKER) == 1
+    assert capsys.readouterr().out == (
+        "#### ❌ Mutation testing: failed\n\n"
+        "1 mutants in the changed code got no verdict (compile errors or an interrupted run), "
+        "so the run proves nothing.\n"
+    )
+
+
+def test_mutation_no_verdict_can_be_waived(repo, capsys):
+    mutants_report(repo.root, ["CompileError"])
+    waive_mutation(repo)
+    assert cli.main(STRYKER) == 0
+    out = capsys.readouterr().out
+    assert "Mutation testing: failed (waived)" in out
+    assert "::warning::mutation is waived until" in out
+
+
+def test_mutation_no_mutants_text_is_exact(repo, capsys):
+    mutants_report(repo.root, [])
+    assert cli.main(STRYKER) == 0
+    assert capsys.readouterr().out == "#### ✅ Mutation testing: no mutants in the changed code\n"
+
+
+def test_mutation_no_mutants_text_with_arid_mutants_is_exact(repo, capsys):
+    repo.write({"a.ts": "console.log(1)\n"})
+    mutants_report(repo.root, ["Survived"])
+    assert cli.main(STRYKER) == 0
+    assert capsys.readouterr().out == (
+        "#### ✅ Mutation testing: no mutants in the changed code\n\n"
+        "1 mutants excluded as arid (logging/debug output).\n"
+    )
+
+
+def test_mutation_unreliable_text_is_exact(repo, capsys):
+    mutants_report(repo.root, ["Timeout", "Timeout", "Timeout"])
+    assert cli.main(STRYKER) == 1
+    assert capsys.readouterr().out == (
+        "#### ❌ Mutation testing: failed\n\n"
+        "Score **100%** (minimum 80%): 0 killed, 3 timed out, 0 survived, 0 not covered.\n\n"
+        "Most mutants timed out, so the run proves nothing: raise the mutation tool's timeout "
+        "(e.g. gremlins `--timeout-coefficient`).\n"
+    )
+
+
+def test_mutation_survivor_text_is_exact(repo, capsys):
+    mutants_report(repo.root, ["Killed", "Survived", "NoCoverage"])
+    assert cli.main(STRYKER) == 1
+    assert capsys.readouterr().out == (
+        "::warning file=a.ts,line=2::surviving mutant (Eq): no test noticed this change\n"
+        "::warning file=a.ts,line=3::surviving mutant (Eq): no test noticed this change\n"
+        "#### ❌ Mutation testing: failed\n\n"
+        "Score **33.33%** (minimum 80%): 1 killed, 0 timed out, 1 survived, 1 not covered.\n\n"
+        "Surviving mutants (tests did not notice these bugs):\n\n"
+        "- `a.ts:2` Eq\n- `a.ts:3` Eq\n"
+    )
+
+
+def test_mutation_lists_and_annotates_at_most_fifty_survivors(repo, capsys):
+    mutants_report(repo.root, ["Killed", *["Survived"] * 51])
+    assert cli.main(STRYKER) == 1
+    out = capsys.readouterr().out
+    assert out.count("::warning ") == 50
+    assert out.count("\n- `a.ts:") == 50
+    assert "- `a.ts:51` Eq" in out
+    assert "a.ts:52" not in out
+
+
+def test_mutation_annotations_name_the_file_from_the_repository_root(repo, capsys, monkeypatch):
+    (repo.root / "svc").mkdir()
+    monkeypatch.chdir(repo.root / "svc")
+    mutants_report(repo.root / "svc", ["Survived"])
+    assert cli.main(STRYKER) == 1
+    assert "::warning file=svc/a.ts,line=1::surviving mutant" in capsys.readouterr().out
+
+
+def test_mutation_passing_run_does_not_ask_git_for_a_prefix(repo, capsys, monkeypatch):
+    monkeypatch.setattr(cli.gitdiff, "repo_prefix", lambda: pytest.fail("repo_prefix called"))
+    mutants_report(repo.root, ["Killed"])
+    assert cli.main(STRYKER) == 0
+    assert "Score **100%**" in capsys.readouterr().out
+
+
+def test_mutation_failure_can_be_waived(repo, capsys):
+    mutants_report(repo.root, ["Survived"])
+    waive_mutation(repo)
+    assert cli.main(STRYKER) == 0
+    out = capsys.readouterr().out
+    assert "Mutation testing: failed (waived)" in out
+    assert "::warning::mutation is waived until" in out
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["mutation", "m.json"],
+        ["mutation", "m.json", "--format", "bogus"],
+        ["mutation", "m.json", "--format", "stryker", "--preset", "bogus"],
+    ],
+)
+def test_mutation_arguments_are_validated(argv, capsys):
+    with pytest.raises(SystemExit) as exc:
+        cli.build_parser().parse_args(argv)
+    assert exc.value.code == 2
+    capsys.readouterr()
+
+
+def test_mutation_accepts_every_format_and_preset():
+    parser = cli.build_parser()
+    for fmt in ("gremlins", "mutation-testing-elements", "mutmut", "stryker"):
+        assert parser.parse_args(["mutation", "m.json", "--format", fmt]).format == fmt
+    args = parser.parse_args(["mutation", "m.json", "--format", "stryker", "--preset", "go"])
+    assert args.preset == "go"
+
+
+# ------------------------------------------------------------- the command line grammar
+CHANGED = ["changed", "--base", "b", "--preset", "go", "--kind", "tests"]
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        [],
+        ["policy"],
+        ["policy", "bogus"],
+        ["policy", "get", "no.such.key"],
+        ["plan"],
+        ["plan", "--language", "cobol"],
+        ["changed", "--preset", "go", "--kind", "tests"],
+        ["changed", "--base", "b", "--kind", "tests"],
+        ["changed", "--base", "b", "--preset", "go"],
+        ["changed", "--base", "b", "--preset", "bogus", "--kind", "tests"],
+        ["changed", "--base", "b", "--preset", "go", "--kind", "bogus"],
+        [*CHANGED, "--sep", "bogus"],
+        ["presence", "--preset", "go"],
+        ["presence", "--base", "b"],
+        ["presence", "--base", "b", "--preset", "bogus"],
+        ["diff-coverage", "r.xml"],
+        ["diff-coverage", "--base", "b"],
+        ["diff-coverage", "--base", "b", "--preset", "bogus", "r.xml"],
+        ["ratchet"],
+        ["ratchet", "r.xml", "--format", "bogus"],
+    ],
+)
+def test_invalid_command_lines_are_rejected(argv):
+    with pytest.raises(SystemExit) as exc:
+        cli.build_parser().parse_args(argv)
+    assert exc.value.code == 2
+
+
+@pytest.mark.parametrize("sep", ["space", "newline", "comma"])
+def test_changed_separators(sep):
+    assert cli.build_parser().parse_args([*CHANGED, "--sep", sep]).sep == sep
+    assert cli.build_parser().parse_args(CHANGED).sep == "space"
+
+
+def test_command_line_defaults_and_types():
+    parser = cli.build_parser()
+    assert parser.prog == "golden"
+    assert parser.description == cli.__doc__
+    args = parser.parse_args(["plan", "--language", "python"])
+    assert args.policy == Path("golden.toml")
+    args = parser.parse_args(["--policy", "other.toml", "plan", "--language", "python"])
+    assert args.policy == Path("other.toml")
+    assert isinstance(args.policy, Path)
+    assert parser.parse_args(["policy", "get", "coverage.diff_min"]).key == "coverage.diff_min"
+    ratchet = parser.parse_args(["ratchet", "r.xml"])
+    assert (ratchet.format, ratchet.sha, ratchet.report) == ("auto", "", Path("r.xml"))
+    assert parser.parse_args(["ratchet", "r.xml", "--format", "auto"]).format == "auto"
+    assert parser.parse_args(["diff-coverage", "--base", "b", "a.xml", "b.xml"]).report == [
+        Path("a.xml"),
+        Path("b.xml"),
+    ]

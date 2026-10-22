@@ -270,21 +270,22 @@ def cmd_mutation(args: argparse.Namespace) -> int:
             if args.preset
             else gitdiff.changed_lines(args.base)
         )
-    tally, lived = mutation.evaluate(args.report, args.format, lines)
+    tally, lived = mutation.evaluate(args.report, args.format, lines, arid_filter=args.arid_filter)
     if tally.inconclusive:
         return verdict(
             "Mutation testing",
             passed=False,
             detail=f"{tally.invalid} mutants in the changed code got no verdict (compile errors "
-            "or an interrupted run), so the run proves nothing.",
+            "or an interrupted run), so the run proves nothing." + tally.arid_note,
             waived=_waived(policy, "mutation"),
         )
     if tally.score is None:
-        summary("#### ✅ Mutation testing: no mutants in the changed code")
+        summary("#### ✅ Mutation testing: no mutants in the changed code" + tally.arid_note)
         return 0
     detail = (
         f"Score **{tally.score:g}%** (minimum {minimum:g}%): {tally.killed} killed, "
         f"{tally.timeout} timed out, {tally.survived} survived, {tally.no_coverage} not covered."
+        + tally.arid_note
     )
     if tally.unreliable:
         detail += (
@@ -416,6 +417,26 @@ def _add_local_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
     p.set_defaults(func=cmd_local)
 
 
+def _add_mutation_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    p = sub.add_parser("mutation", help="gate: mutation score meets policy")
+    p.add_argument("report", type=Path)
+    p.add_argument("--format", choices=sorted(mutation.PARSERS), required=True)
+    p.add_argument("--base", help="only count mutants on lines changed since BASE")
+    p.add_argument(
+        "--preset",
+        choices=sorted(presets.PRESETS),
+        help="with --base, also count mutants in source functions the changed tests touch",
+    )
+    p.add_argument(
+        "--no-arid-filter",
+        dest="arid_filter",
+        action="store_false",
+        help="score mutants on logging/debug-only lines too (stryker and gremlins reports; "
+        "for debugging the filter)",
+    )
+    p.set_defaults(func=cmd_mutation)
+
+
 def _add_flaky_scan_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     p = sub.add_parser("flaky-scan", help="find flaky tests in the reports of repeated runs")
     p.add_argument("report", type=Path, nargs="*", help="one test report per run, same commit")
@@ -489,17 +510,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--sha", default="")
     p.set_defaults(func=cmd_ratchet)
 
-    p = sub.add_parser("mutation", help="gate: mutation score meets policy")
-    p.add_argument("report", type=Path)
-    p.add_argument("--format", choices=sorted(mutation.PARSERS), required=True)
-    p.add_argument("--base", help="only count mutants on lines changed since BASE")
-    p.add_argument(
-        "--preset",
-        choices=sorted(presets.PRESETS),
-        help="with --base, also count mutants in source functions the changed tests touch",
-    )
-    p.set_defaults(func=cmd_mutation)
-
+    _add_mutation_parser(sub)
     _add_sast_parser(sub)
 
     p = sub.add_parser("scorecard", help="gate: repository maturity level")

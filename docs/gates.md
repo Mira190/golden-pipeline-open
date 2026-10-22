@@ -157,11 +157,37 @@ Stryker.NET and Stryker4s emit it. Absolute file paths in the report are made re
 the assertion that would have failed. For example, a surviving `CONDITIONALS_BOUNDARY` on
 `if qty >= 50` means no test checks quantity 49 *and* 50.
 
-**Arid code:** lines where no reasonable test should care (help text, log messages) can be
-excluded. Use `# pragma: no mutate` or mutmut's `do_not_mutate_patterns`, `// Stryker disable
-next-line`, or `--exclude-files` for gremlins. Keep the list short and commented. Google found
-that filtering arid nodes is what turns mutation testing from noise (15% of mutants useful) into
-signal (89%).
+**Arid code.** On some lines no reasonable test should care, such as log messages, debug output
+and help text. Their mutants are noise, not missing assertions. Google found that filtering these
+*arid nodes* is what turns mutation testing from noise (15% of mutants useful) into signal (89%).
+
+- **Built in, for Stryker, mutation-testing-elements and gremlins reports.**
+  - `golden mutation` reads the source line of every in-scope mutant. It drops the mutant before
+    scoring when the whole line is one logging or debug call.
+  - JS/TS calls: `console.log/debug/info/warn/error/trace(…)`, `debug(…)`, and
+    `logger.<level>(…)` or `log.<level>(…)`.
+  - Go calls: `log.Print*/Fatal*/Panic*`, `fmt.Print*`, `slog.<level>(…)` and
+    `logger.<level>(…)`. `fmt.Sprintf`, `Errorf` and `Fprintf` stay mutated, because they build
+    values tests may check.
+  - Dropped mutants count as neither killed nor survived, and the gate reports how many.
+- **The filter is conservative.** A line is arid only when the call's arguments merely name
+  values. These lines all stay mutated:
+  - a nested call, such as `console.log(applyDiscount(x))`
+  - a template interpolation (`${…}`)
+  - an assignment, `++`, `await` or `<-`
+  - `return x || console.log(y)` and `if (a) console.log(b)`
+  - multi-line calls, and lines with a trailing comment
+
+  The benchmark checks both directions:
+  - `mutation/arid-log-line-is-not-a-missing-test` must pass.
+  - `mutation/logic-inside-a-log-call-stays-mutated` must block.
+- **Unreadable source.** If a source file can't be read, nothing is excluded.
+- **Opting out.** `--no-arid-filter` turns the filter off.
+- **mutmut (Python).** mutmut reports only totals, so there is nothing to post-filter. Exclude
+  arid lines when the mutants are generated, with `# pragma: no mutate` or
+  `do_not_mutate_patterns`, anchored as in this repository's `pyproject.toml`.
+- **Anything else:** `// Stryker disable next-line`, or `--exclude-files` for gremlins. Keep the
+  list short and commented.
 
 ## Static analysis on the diff (optional)
 
