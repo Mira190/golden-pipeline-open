@@ -88,7 +88,7 @@ jobs:
   # Publishes from main, so it must wait for every gate: an image is never
   # pushed from a commit the pipeline rejected.
   example-container:
-    needs: [golden-cli, example-python, example-node, example-go, drills]
+    needs: [golden-cli, example-python, example-node, example-go, drills, sast]
     uses: $/.github/workflows/container.yml
     permissions:
       contents: read
