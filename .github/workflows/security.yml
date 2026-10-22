@@ -73,12 +73,27 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # Who introduced the advisory decides who must act on it. A pull request
+      # is blocked only for what it adds (dependency review, below); an advisory
+      # published today against a dependency it doesn't touch is reported, not
+      # blocking, or every open PR would go red at once and people would learn
+      # to ask for bypasses. Default-branch pushes and the scheduled run block:
+      # fix it, or add an expiring `[[IgnoredVulns]]` entry to osv-scanner.toml
+      # (`golden policy check` enforces reason + ignoreUntil <= 90 days).
       - name: Known vulnerabilities in lockfiles (OSV)
+        id: osv
+        continue-on-error: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
         uses: google/osv-scanner-action/osv-scanner-action@b1d267aea5211fa648d9d442fa64b90dbdcbdd36 # v2.7.0
         with:
           scan-args: |-
             --recursive
             ${{ inputs.working-directory }}
+      - name: Report advisories in existing dependencies
+        if: steps.osv.outcome == 'failure'
+        run: |
+          msg="OSV-Scanner found known vulnerabilities in dependencies this pull request does not change (see the step above). Not blocking here; the default branch run will block until they are fixed or excepted in osv-scanner.toml with an expiry."
+          echo "::warning::$msg"
+          printf '#### ⚠️ Vulnerability scan: report-only on pull requests\n\n%s\n' "$msg" >> "$GITHUB_STEP_SUMMARY"
       - name: New dependencies in this pull request
         if: github.event_name == 'pull_request'
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0

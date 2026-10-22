@@ -184,11 +184,29 @@ GitHub returns `bypass_actors` only to a caller with write access to the ruleset
 | Check | Tool | Blocks on |
 |---|---|---|
 | Committed secrets | gitleaks 8.30.1 (digest-pinned image); PR range on PRs, full history on pushes | any finding |
-| Vulnerable dependencies | OSV-Scanner 2.7 over every lockfile in the project directory | any known vulnerability |
+| Vulnerable dependencies | OSV-Scanner 2.7 over every lockfile in the project directory | any known vulnerability on default-branch pushes and the daily scheduled run; **report-only on PRs and in the merge queue** (see below) |
 | New dependencies in the PR | dependency-review-action | severity ≥ `high` (configurable); licences outside `allow-licenses` if set |
 | Workflow security | zizmor 1.30 (`regular` persona) | any finding (template injection, excessive permissions, unpinned actions, cache poisoning, …) |
 | Workflow correctness | actionlint 1.7.12 with shellcheck (digest-pinned image) | any finding (invalid expressions, unknown inputs, shell bugs in `run:`); input `workflow-lint` |
 | Go reachability | govulncheck 1.9 (in the Go lint step) | a reachable vulnerable symbol |
+
+**Who introduced the advisory decides who must act.** A PR is blocked for vulnerabilities it
+*adds*: dependency review is diff-aware. An advisory published today against a dependency the PR
+doesn't touch is reported on the PR but doesn't block it. Otherwise every open PR would go red
+at once, and people would learn to ask for bypasses. The default branch carries that debt
+instead: its push and daily scheduled runs block until someone upgrades the dependency or adds a
+time-boxed exception to `osv-scanner.toml`:
+
+```toml
+[[IgnoredVulns]]
+id = "GHSA-xxxx-xxxx-xxxx"
+reason = "no upstream fix yet; not reachable from our code, PLAT-123"
+ignoreUntil = 2026-12-31   # required, at most 90 days ahead
+```
+
+`golden policy check` enforces the same rules as a waiver: an `id`, a `reason`, and an
+`ignoreUntil` at most 90 days ahead. It lists every exception in the job summary. After the date,
+OSV-Scanner enforces the advisory again. Protect `osv-scanner.toml` with CODEOWNERS.
 
 ## Verdict
 

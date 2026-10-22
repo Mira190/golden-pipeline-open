@@ -14,6 +14,8 @@ on:
   push:
     branches: [main]
   merge_group:
+  schedule:
+    - cron: "23 6 * * *"   # daily: new advisories and flaky tests surface on main
 permissions: {}
 jobs:
   ci:

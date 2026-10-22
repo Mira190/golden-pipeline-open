@@ -8,6 +8,7 @@ and exits non-zero only when the merge must be blocked.
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 import os
 import subprocess
@@ -26,6 +27,7 @@ from golden import (
     local,
     mutation,
     optout,
+    osvignores,
     plan,
     presence,
     presets,
@@ -64,10 +66,17 @@ def cmd_policy(args: argparse.Namespace) -> int:
     deferred = [f"- {note}" for note in policy.deferred]
     for note in policy.deferred:
         annotate("notice", f"golden.toml: {note}")
+    today = dt.datetime.now(dt.UTC).date()
+    ignores = [
+        f"- **{i.id}** until {i.until} ({i.file}): {i.reason}"
+        + (" _(expired: enforced again)_" if i.until < today else "")
+        for i in osvignores.check(Path(), today)
+    ]
     summary(
         "\n".join(["### Golden policy", "", "| Key | Value | Floor |", "|---|---|---|", *rows])
         + ("\n\n**Waivers**\n\n" + "\n".join(waivers) if waivers else "")
         + ("\n\n**Not applied to this change**\n\n" + "\n".join(deferred) if deferred else "")
+        + ("\n\n**Vulnerability exceptions**\n\n" + "\n".join(ignores) if ignores else "")
     )
     return 0
 

@@ -8,6 +8,14 @@ Second-person rules:
   and only when that can be verified (`golden.optout`). A self-applied or unverifiable label is
   ignored with a warning, and the gate stays enforced.
 
+Vulnerabilities are owned by whoever introduced them:
+
+- OSV-Scanner is report-only on pull requests and in the merge queue, and blocking on
+  default-branch pushes and the new daily `schedule` run (templates, README, `ci.yml`). A PR is
+  still blocked for vulnerable dependencies it adds (dependency review).
+- `osv-scanner.toml` exceptions need an `id`, a `reason` and an `ignoreUntil` at most 90 days
+  ahead. `golden policy check` enforces this and lists the exceptions. CODEOWNERS covers the file.
+
 Weakening a test is gated:
 
 - Mutation testing now also mutates every source function that a changed or **removed** test
