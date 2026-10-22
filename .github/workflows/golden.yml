@@ -67,6 +67,10 @@ on:
         description: Run secret, dependency and workflow scanning.
         type: boolean
         default: true
+      workflow-lint:
+        description: Lint the repository's workflows with actionlint (part of `security`).
+        type: boolean
+        default: true
       skip-presence-label:
         description: PR label that turns the test-presence gate into report-only.
         type: string
@@ -245,7 +249,7 @@ jobs:
       - name: Diff coverage (changed lines must be tested)
         if: env.BASE != ''
         working-directory: ${{ inputs.working-directory }}
-        run: golden diff-coverage --base "$BASE" "$REPORT"
+        run: golden diff-coverage --base "$BASE" --preset "$LANGUAGE" "$REPORT"
 
       # Pull requests only: the opt-out label lives on the PR, not the merge-queue commit.
       - name: Test presence (changed code ships with tests)
@@ -253,7 +257,7 @@ jobs:
         working-directory: ${{ inputs.working-directory }}
         env:
           REPORT_ONLY: ${{ needs.plan.outputs.presence-report-only == 'true' && '--report-only' || '' }}
-        run: golden presence --base "$BASE" --preset "$LANGUAGE" $REPORT_ONLY
+        run: golden presence --base "$BASE" --preset "$LANGUAGE" ${REPORT_ONLY:+"$REPORT_ONLY"}
 
       # Baseline coverage of the default branch travels through the Actions
       # cache: PRs can read caches written on their base branch, and nothing
@@ -349,6 +353,7 @@ jobs:
     uses: $/.github/workflows/security.yml
     with:
       working-directory: ${{ inputs.working-directory }}
+      workflow-lint: ${{ inputs.workflow-lint }}
       runs-on: ${{ inputs.runs-on }}
       egress-policy: ${{ inputs.egress-policy }}
 

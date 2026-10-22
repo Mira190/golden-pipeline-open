@@ -2,7 +2,9 @@
 
 All three are normalised to Stryker's definition:
     score = detected / valid = (killed + timeout) / (killed + timeout + survived + no_coverage)
-Compile/runtime errors, ignored and not-yet-run mutants are excluded.
+Compile/runtime errors, ignored and not-yet-run mutants are excluded from the
+score; but a run in which *no* mutant got a verdict fails closed, like a missing
+report, because it proves nothing.
 
 Stryker and gremlins reports carry file and line for every mutant, so they can
 be narrowed to the lines a change touched; mutmut is narrowed up front by
@@ -20,16 +22,30 @@ from typing import Any
 
 Range = tuple[int, int]
 
-# Normalised statuses.
-KILLED, TIMEOUT, SURVIVED, NO_COVERAGE, OTHER = (
+# Normalised statuses. IGNORED is a deliberate, reviewable opt-out (a disable
+# comment); OTHER is a mutant that never got a verdict (compile error, not run).
+KILLED, TIMEOUT, SURVIVED, NO_COVERAGE, IGNORED, OTHER = (
     "killed",
     "timeout",
     "survived",
     "no-coverage",
+    "ignored",
     "other",
 )
-STRYKER = {"Killed": KILLED, "Timeout": TIMEOUT, "Survived": SURVIVED, "NoCoverage": NO_COVERAGE}
-GREMLINS = {"KILLED": KILLED, "TIMED OUT": TIMEOUT, "LIVED": SURVIVED, "NOT COVERED": NO_COVERAGE}
+STRYKER = {
+    "Killed": KILLED,
+    "Timeout": TIMEOUT,
+    "Survived": SURVIVED,
+    "NoCoverage": NO_COVERAGE,
+    "Ignored": IGNORED,
+}
+GREMLINS = {
+    "KILLED": KILLED,
+    "TIMED OUT": TIMEOUT,
+    "LIVED": SURVIVED,
+    "NOT COVERED": NO_COVERAGE,
+    "SKIPPED": IGNORED,
+}
 # When most mutants "time out", the tool's timeout is miscalibrated and the
 # run proves nothing; counting those as detected would pass a broken run.
 MAX_TIMEOUT_SHARE = 0.5
@@ -49,6 +65,8 @@ class Tally:
     timeout: int = 0
     survived: int = 0
     no_coverage: int = 0
+    # Mutants in scope that never produced a verdict (compile errors, not run).
+    invalid: int = 0
 
     @property
     def valid(self) -> int:
@@ -64,20 +82,26 @@ class Tally:
     def unreliable(self) -> bool:
         return self.valid > 0 and self.timeout / self.valid > MAX_TIMEOUT_SHARE
 
+    @property
+    def inconclusive(self) -> bool:
+        """Mutants were generated but none got a verdict: the run proves nothing."""
+        return self.valid == 0 and self.invalid > 0
+
     @classmethod
     def of(cls, mutants: list[Mutant]) -> Tally:
         c = Counter(m.status for m in mutants)
-        return cls(c[KILLED], c[TIMEOUT], c[SURVIVED], c[NO_COVERAGE])
+        return cls(c[KILLED], c[TIMEOUT], c[SURVIVED], c[NO_COVERAGE], c[OTHER])
 
 
-def _relative(name: str, project_root: str | None) -> str:
-    """Report paths may be absolute (Stryker.NET, PIT); the diff's are project-relative."""
+def _relative(name: str, project_root: str | None = None) -> str:
+    """Reports may name files `./src/a.ts` or by absolute path (Stryker.NET, PIT);
+    git names them `src/a.ts`, relative to the project."""
     path = PurePosixPath(name)
     if not path.is_absolute():
-        return name
+        return path.as_posix()
     for root in (project_root, Path.cwd().as_posix()):
         if root and path.is_relative_to(root):
-            return str(path.relative_to(root))
+            return path.relative_to(root).as_posix()
     return name
 
 
@@ -99,7 +123,12 @@ def _elements(data: dict[str, Any]) -> list[Mutant]:
 
 def _gremlins(data: dict[str, Any]) -> list[Mutant]:
     return [
-        Mutant(f["file_name"], int(m["line"]), GREMLINS.get(m["status"], OTHER), m.get("type", ""))
+        Mutant(
+            _relative(f["file_name"]),
+            int(m["line"]),
+            GREMLINS.get(m["status"], OTHER),
+            m.get("type", ""),
+        )
         for f in data.get("files", [])
         for m in f.get("mutations", [])
     ]
@@ -107,6 +136,10 @@ def _gremlins(data: dict[str, Any]) -> list[Mutant]:
 
 def _mutmut(data: dict[str, Any]) -> Tally:
     # `mutmut export-cicd-stats` aggregates; suspicious/segfault behave like timeouts.
+    # Fails closed like a missing report: an interrupted run proves nothing about the
+    # mutants it never finished. (`total` cannot tell, it counts unselected mutants too.)
+    if int(data.get("check_was_interrupted_by_user", 0)):
+        raise ValueError("mutmut run was interrupted; the mutation report is incomplete")
     return Tally(
         killed=int(data.get("killed", 0)),
         timeout=int(data.get("timeout", 0))
@@ -134,7 +167,7 @@ def _load(path: Path) -> dict[str, Any]:
 
 
 def in_ranges(mutant: Mutant, lines: dict[str, list[Range]]) -> bool:
-    return any(lo <= mutant.line <= hi for lo, hi in lines.get(mutant.file, []))
+    return any(lo <= mutant.line <= hi for lo, hi in lines.get(_relative(mutant.file), []))
 
 
 def evaluate(

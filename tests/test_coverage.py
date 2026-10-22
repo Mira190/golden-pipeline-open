@@ -59,6 +59,23 @@ def test_empty_report_is_fully_covered():
     assert coverage.Totals(0, 0).percent == 100.0
 
 
+@pytest.mark.parametrize(
+    ("name", "content"),
+    [("lcov.info", ""), ("coverage.xml", "<coverage/>"), ("coverage.out", "mode: set\n")],
+)
+def test_report_without_coverable_lines_fails_closed(tmp_path, name, content):
+    path = tmp_path / name
+    path.write_text(content)
+    with pytest.raises(ValueError, match="no coverable lines"):
+        coverage.read_totals(path)
+
+
+def test_cobertura_counts_a_single_hit_as_covered(tmp_path):
+    path = tmp_path / "coverage.xml"
+    path.write_text('<coverage><line hits="1"/><line hits="0"/><line hits="0"/></coverage>')
+    assert coverage.read_totals(path) == coverage.Totals(1, 3)
+
+
 def test_baseline_roundtrip(tmp_path):
     path = tmp_path / "deep" / "baseline.json"
     assert coverage.read_baseline(path) is None
@@ -74,6 +91,7 @@ def test_baseline_roundtrip(tmp_path):
         (89.5, 90.0, True, -0.5),
         (89.49, 90.0, False, -0.51),
         (95.0, 90.0, True, 5.0),
+        (90.004, 90.0, True, 0.0),
     ],
 )
 def test_ratchet(current, baseline, ok, delta):
@@ -84,7 +102,7 @@ def test_ratchet(current, baseline, ok, delta):
 def test_baseline_without_line_percent_fails_closed(tmp_path, content):
     path = tmp_path / "baseline.json"
     path.write_text(content)
-    with pytest.raises(ValueError, match="has no line_percent"):
+    with pytest.raises(ValueError, match="is malformed"):
         coverage.read_baseline(path)
 
 
@@ -93,3 +111,45 @@ def test_truncated_cobertura_fails_closed(tmp_path):
     path.write_text('<?xml version="1.0" ?><coverage lines-covered="3"')
     with pytest.raises(ValueError, match="unreadable Cobertura report"):
         coverage.read_totals(path)
+
+
+def test_measured_files_cobertura_joins_sources(tmp_path):
+    path = tmp_path / "coverage.xml"
+    path.write_text(
+        "<coverage><sources><source>/w/src</source><source></source></sources>"
+        '<packages><package><classes><class filename="pkg/a.py"/><class name="no-file"/>'
+        "</classes></package></packages></coverage>"
+    )
+    assert coverage.measured_files(path) == {"pkg/a.py", "/w/src/pkg/a.py"}
+
+
+def test_measured_files_lcov_and_gocover(tmp_path):
+    lcov = tmp_path / "lcov.info"
+    lcov.write_text(LCOV)
+    assert coverage.measured_files(lcov) == {"src/a.ts", "src/b.ts"}
+    go = tmp_path / "coverage.out"
+    go.write_text(GOCOVER)
+    assert coverage.measured_files(go) == {
+        "example.com/m/a.go",
+        "example.com/m/my dir/b.go",
+        "example.com/m/c.go",
+    }
+
+
+@pytest.mark.parametrize(
+    ("file", "expected"),
+    [
+        ("src/pkg/a.py", True),
+        ("pkg/a.py", True),
+        ("a.py", True),
+        ("src/pkg/b.py", False),
+        ("other/pkg/a.py", False),
+        ("xa.py", False),
+    ],
+)
+def test_is_measured(file, expected):
+    assert coverage.is_measured(file, {"/w/src/pkg/a.py"}) is expected
+
+
+def test_short_report_names_do_not_cover_deeper_files():
+    assert not coverage.is_measured("pkg/__init__.py", {"__init__.py"})

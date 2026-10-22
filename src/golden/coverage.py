@@ -67,17 +67,44 @@ PARSERS = {"cobertura": _cobertura, "lcov": _lcov, "gocover": _gocover}
 
 
 def read_totals(path: Path, fmt: str = "auto") -> Totals:
+    """Fails closed: a report with no coverable lines means the tests did not run."""
     fmt = detect_format(path) if fmt == "auto" else fmt
-    return PARSERS[fmt](path.read_text(encoding="utf-8"))
+    totals = PARSERS[fmt](path.read_text(encoding="utf-8"))
+    if totals.total == 0:
+        raise ValueError(f"coverage report {path} has no coverable lines; did the tests run?")
+    return totals
+
+
+def measured_files(path: Path) -> set[str]:
+    """Every file a coverage report knows about, as the report spells it (POSIX).
+
+    Cobertura names are also joined with each `<source>` root, because
+    coverage.py writes `pkg/a.py` under `<source>src</source>`.
+    """
+    text = path.read_text(encoding="utf-8")
+    fmt = detect_format(path)
+    if fmt == "lcov":
+        return {m.strip() for m in re.findall(r"^SF:(.+)$", text, re.MULTILINE)}
+    if fmt == "gocover":
+        return {line.rsplit(":", 1)[0] for line in text.splitlines()[1:] if ":" in line}
+    root = ElementTree.fromstring(text)  # noqa: S314  # nosec B314
+    roots = [(s.text or "").strip() for s in root.iter("source")]
+    names = {c.attrib["filename"] for c in root.iter("class") if "filename" in c.attrib}
+    return names | {f"{r.rstrip('/')}/{n}" for r in roots if r for n in names}
+
+
+def is_measured(file: str, measured: set[str]) -> bool:
+    """Whether `file` (relative to the project) appears in the report under any spelling."""
+    return any(m == file or m.endswith("/" + file) for m in measured)
 
 
 def read_baseline(path: Path) -> float | None:
     if not path.exists():
         return None
-    data = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(data, dict) or "line_percent" not in data:
-        raise ValueError(f"coverage baseline {path} has no line_percent")
-    return float(data["line_percent"])
+    try:
+        return float(json.loads(path.read_text(encoding="utf-8"))["line_percent"])
+    except (KeyError, TypeError) as exc:
+        raise ValueError(f"coverage baseline {path} is malformed") from exc
 
 
 def write_baseline(path: Path, percent: float, sha: str = "") -> None:

@@ -15,6 +15,7 @@ from __future__ import annotations
 import datetime as dt
 import math
 import os
+import re
 import subprocess
 import tomllib
 from dataclasses import dataclass, field
@@ -23,6 +24,10 @@ from typing import Any
 
 GATES = ("diff-coverage", "coverage-ratchet", "test-presence", "mutation", "scorecard")
 MAX_WAIVER_DAYS = 90
+# An exemption that names no directory or file stem ("**", "*.py", "**/*")
+# switches test presence and mutation off for a whole language: that is a
+# waiver without a reason or expiry, so it is rejected.
+BLANKET_EXEMPT = re.compile(r"^(\*\*/)*\*{1,2}(\.[^/*]+)?$")
 
 
 class PolicyError(ValueError):
@@ -99,10 +104,10 @@ class Policy:
         return w if w and w.active(today or dt.datetime.now(dt.UTC).date()) else None
 
 
-def _table(data: dict[str, Any], key: str, where: str) -> dict[str, Any]:
+def _table(data: dict[str, Any], key: str, where: str = "", hint: str = "") -> dict[str, Any]:
     value = data.get(key, {})
     if not isinstance(value, dict):
-        raise PolicyError(f"{where}{key} must be a table ([{where}{key}])")
+        raise PolicyError(f"[{where}{key}] must be a table{hint}")
     return value
 
 
@@ -111,7 +116,7 @@ def _parse_waivers(raw: dict[str, Any], today: dt.date) -> dict[str, Waiver]:
     for gate in raw:
         if gate not in GATES:
             raise PolicyError(f"waiver for unknown gate {gate!r}; gates are {', '.join(GATES)}")
-        spec = _table(raw, gate, "waivers.")
+        spec = _table(raw, gate, "waivers.", " with reason and expires")
         unknown = set(spec) - {"reason", "expires"}
         if unknown:
             raise PolicyError(f"waiver for {gate}: unknown key(s) {', '.join(sorted(unknown))}")
@@ -134,10 +139,11 @@ def from_mapping(data: dict[str, Any], today: dt.date | None = None) -> Policy:
         raise PolicyError(f"unknown section(s): {', '.join(sorted(unknown))}")
     for section, names in KEYS.items():
         # A misspelt key would silently fall back to the default: fail closed instead.
-        extra = set(_table(data, section, "")) - names
-        if extra:
-            keys = ", ".join(f"{section}.{k}" for k in sorted(extra))
-            raise PolicyError(f"unknown key(s) {keys}; known: {', '.join(sorted(names))}")
+        if typos := set(_table(data, section)) - names:
+            raise PolicyError(
+                f"unknown key(s) in [{section}]: {', '.join(sorted(typos))}; "
+                f"known: {', '.join(sorted(names))}"
+            )
 
     values: dict[str, float] = {}
     for key, bound in BOUNDS.items():
@@ -151,7 +157,12 @@ def from_mapping(data: dict[str, Any], today: dt.date | None = None) -> Policy:
     exempt = data.get("presence", {}).get("exempt", [])
     if not isinstance(exempt, list) or not all(isinstance(e, str) for e in exempt):
         raise PolicyError("presence.exempt must be a list of glob strings")
-    waivers = _parse_waivers(_table(data, "waivers", ""), today)
+    if blanket := [e for e in exempt if BLANKET_EXEMPT.match(e.strip().lstrip("/"))]:
+        raise PolicyError(
+            f"presence.exempt {blanket} would exempt every file; name the directories or files, "
+            "or use a time-boxed [waivers.test-presence]"
+        )
+    waivers = _parse_waivers(_table(data, "waivers"), today)
     return Policy(values, tuple(exempt), waivers)
 
 

@@ -8,10 +8,24 @@ one, and what the pipeline does about them.
 
 | Actor | Trusted for | Not trusted for |
 |---|---|---|
-| Caller's workflow file (reviewed, on the default branch) | inputs, commands, permissions granted | — |
+| Caller's workflow file and `golden.toml` | inputs, commands, permissions granted, thresholds | anything while they are *changed by the PR under test* (see below) |
 | Pull request code (possibly from a fork) | nothing | running with secrets, writing caches the default branch reads, publishing |
 | Third-party actions and tools | the exact commit / digest / version pinned | anything a tag currently points to |
 | This repository | the commit the caller pinned | a moving tag or branch |
+
+**A pull request runs its own version of the caller's workflow.** On `pull_request` events,
+GitHub runs `ci.yml` as it is on the PR head, not on the default branch, and `golden.toml` is
+read from the checkout too. A PR can therefore grade itself: set `mutation: false` or
+`security: false`, point `test-command` at a pre-made report, or relax a threshold to its
+floor, and `ci / golden` still goes green. Controls, from weakest to strongest:
+
+- CODEOWNERS on `/.github/` and `golden.toml` (as in this repository), and a ruleset with
+  **Require review from Code Owners**. Without that ruleset setting, CODEOWNERS only requests a
+  review; it doesn't require one.
+- **Required workflows** in an organisation ruleset ("Require workflows to pass before
+  merging"): the organisation pins `golden.yml` and its inputs centrally, and they run from the
+  central definition, not the PR's copy. This is the control that makes the pipeline a platform
+  guarantee instead of a convention.
 
 ## Threats and controls
 
@@ -58,8 +72,10 @@ Controls:
   (`contents: read` for almost all).
 - Reusable workflows can only *reduce* the caller's token, never raise it.
 - No `secrets: inherit`.
-- Only `container.yml`'s publish job writes (packages, attestations, OIDC), and only on pushes to
-  the default branch.
+- Write scopes are confined to release paths: `container.yml`'s publish job (packages,
+  attestations, OIDC) on pushes to the default branch, and this repository's `release.yml`
+  (contents, attestations, OIDC) on version tags. The only other write is `security-events` for
+  CodeQL and OpenSSF Scorecard uploads.
 
 ### Cache poisoning
 
@@ -72,8 +88,10 @@ Controls:
 
 - The publish job builds with `no-cache: true` and restores nothing.
 - PR caches are scoped to the PR ref and are not visible to the default branch.
-- The only cache the pipeline *reads* on PRs is the coverage baseline. It holds a single number
-  and is written only on default-branch pushes.
+- On PRs the pipeline reads the coverage baseline (a single number) and the uv, Go and
+  golangci-lint dependency caches. All of them are written only by default-branch runs, which
+  PRs can read but never write. Release jobs (`container.yml` publish, `release.yml`) restore no
+  cache at all.
 
 ### Malicious package versions
 
@@ -128,7 +146,8 @@ pinning one SHA pins both.
 
 ## Runner hardening
 
-Every job starts with `step-security/harden-runner`, defaulting to `egress-policy: audit` so it
+Every job that checks out code starts with `step-security/harden-runner` (the verdict jobs only
+run `jq` over their `needs`), defaulting to `egress-policy: audit` so it
 can be adopted without an allowlist. Teams that collect a baseline should switch to `block` with
 an allowlist (input `egress-policy`). harden-runner is free for public repositories on
 GitHub-hosted runners. It's defence in depth, not a boundary: DNS-based block-mode bypasses were

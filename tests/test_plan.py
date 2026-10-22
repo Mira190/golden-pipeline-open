@@ -268,3 +268,24 @@ def test_cli_plan_writes_github_outputs(repo, monkeypatch, capsys):
     assert cli.main(["plan", "--language", "node"]) == 0
     assert "install-command=npm ci --ignore-scripts\n" in out.read_text()
     assert "### Golden plan (node)" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("language", "files", "tests"),
+    [
+        (
+            "python",
+            ["tests/conftest.py", "tests/helpers.py", "conftest.py", "tests/test_a.py"],
+            "tests/test_a.py",
+        ),
+        ("python", ["tests/conftest.py", "tests/fixtures/data.py"], ""),
+        ("node", ["test/setup.ts", "tests/fixtures/x.json", "src/a.test.ts"], "src/a.test.ts"),
+        ("node", ["src/__tests__/helpers.ts"], ""),
+    ],
+)
+def test_flake_gate_only_reruns_runnable_tests(repo, language, files, tests):
+    # Test support files count for presence but cannot be re-run on their own.
+    repo.commit({"README.md": "x"})
+    base = repo.git("rev-parse", "HEAD")
+    repo.commit(dict.fromkeys(files, "x\n"))
+    assert plan.changes(language, base, POLICY)["tests"] == tests

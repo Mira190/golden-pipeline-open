@@ -210,7 +210,8 @@ def test_go_mutation_target_is_the_package(source, expected):
         (PY, "src/pkg/test_utils.py", True),
         (NODE, "src/pricing.test.ts", True),
         (NODE, "src/pricing.spec.mjs", True),
-        (NODE, "src/__tests__/pricing.ts", True),
+        (NODE, "src/__tests__/pricing.ts", False),
+        (NODE, "src/__tests__/pricing.test.ts", True),
         (NODE, "src/__tests__/fixture.json", False),
         (NODE, "test/fixtures/order.json", False),
         (NODE, "src/test/setup.ts", False),
@@ -268,3 +269,22 @@ def test_node_references_dotted_names_and_index(source, text, expected):
 def test_node_test_named_after_dotted_source():
     assert NODE.references("src/order.service.ts", "src/order.service.spec.ts", "")
     assert NODE.references("src/order.service.ts", "src/order.test.ts", "")
+
+
+@pytest.mark.parametrize(
+    ("preset", "path", "runnable"),
+    [
+        ("python", "tests/test_a.py", True),
+        ("python", "pkg/a_test.py", True),
+        ("python", "tests/conftest.py", False),
+        ("python", "tests/helpers.py", False),
+        ("python", "src/test_like_name.py", True),
+        ("node", "src/a.spec.tsx", True),
+        ("node", "test/setup.ts", False),
+        ("node", "src/a.ts", False),
+        ("go", "p/p_test.go", True),
+        ("go", "p/p.go", False),
+    ],
+)
+def test_runnable_tests_by_preset_name(preset, path, runnable):
+    assert presets.get(preset).is_runnable_test(path) is runnable

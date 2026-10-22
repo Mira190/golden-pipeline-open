@@ -160,7 +160,6 @@ id = "presence/python-unicode-filename"
 gate = "presence"
 category = "robustness"
 why = "A non-ASCII file name is C-quoted by git; the source must still be seen."
-known_gap = "Fixed in src/golden/gitdiff.py on the CI session's branch (claude/exciting-newton-q0imwh); passes once merged."
 argv = ["presence", "--base", "{base}", "--preset", "python"]
 expect = "block"
 [scenario.base]

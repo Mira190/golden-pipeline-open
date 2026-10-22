@@ -6,6 +6,8 @@ change.
 
 ```bash
 uv sync
+scripts/local.sh                   # everything ci.yml's golden-cli job checks, before you push
+scripts/local.sh --fast            # policy, format, lint, types only
 uv run pytest -n auto              # unit + end-to-end tests of the gates
 uv run ruff check . && uv run ruff format --check . && uv run mypy
 uv run mutmut run "golden.cli.x_cmd_presence__mutmut_*"   # mutate what you changed

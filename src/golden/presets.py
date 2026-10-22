@@ -26,9 +26,11 @@ class Preset:
     sources: tuple[str, ...]
     # Test code: test modules plus their helpers, fixtures and configuration.
     tests: tuple[str, ...]
-    # Test files a runner can execute on their own (what the flake gate re-runs).
-    runnable: tuple[str, ...] = field(default=())
     ignore: tuple[str, ...] = field(default=())
+    # Test files the runner collects by default. Other test files (conftest.py,
+    # fixtures, helpers) count for test presence but cannot be re-run on their
+    # own: pytest exits 5 and Vitest exits 1 when handed only those.
+    runnable: tuple[str, ...] = field(default=())
 
     def is_test(self, path: str) -> bool:
         return match_any(path, self.tests)
@@ -198,8 +200,9 @@ PRESETS: dict[str, Preset] = {
             "**/test/**",
             "**/tests/**",
         ),
-        # Vitest's and Jest's default test-file patterns.
-        runnable=(f"*.test.{JS_EXT}", f"*.spec.{JS_EXT}", f"**/__tests__/**/*.{JS_EXT}"),
+        # Vitest's default test-file patterns. Files under __tests__/ without the
+        # suffix are often helpers, which both Vitest and Jest refuse to run alone.
+        runnable=(f"*.test.{JS_EXT}", f"*.spec.{JS_EXT}"),
         ignore=(
             "*.d.ts",
             "*.config.*",

@@ -16,7 +16,18 @@ import tempfile
 from dataclasses import asdict
 from pathlib import Path
 
-from golden import __version__, config, coverage, dora, gitdiff, mutation, plan, presence, presets
+from golden import (
+    __version__,
+    config,
+    coverage,
+    dora,
+    gitdiff,
+    local,
+    mutation,
+    plan,
+    presence,
+    presets,
+)
 from golden import scorecard as sc
 from golden.globmatch import match_any
 from golden.report import annotate, summary, verdict
@@ -126,9 +137,30 @@ def cmd_presence(args: argparse.Namespace) -> int:
 
 
 # ----------------------------------------------------------------- diff coverage
+def _unmeasured(args: argparse.Namespace, policy: config.Policy) -> list[str]:
+    """Changed source files that no coverage report mentions.
+
+    diff-cover silently skips files missing from the report, so a new module no
+    test imports (pytest-cov without `source`, Vitest without `coverage.include`)
+    would otherwise pass as "100% covered".
+    """
+    if not args.preset:
+        return []
+    preset = presets.get(args.preset)
+    measured = set().union(*(coverage.measured_files(r) for r in args.report))
+    return [
+        path
+        for path in sorted(gitdiff.changed_lines(args.base))
+        if preset.is_source(path)
+        and not match_any(path, policy.exempt)
+        and not coverage.is_measured(path, measured)
+    ]
+
+
 def cmd_diff_coverage(args: argparse.Namespace) -> int:
     policy = _policy(args)
     minimum = policy.get("coverage.diff_min")
+    unmeasured = _unmeasured(args, policy)
     with tempfile.TemporaryDirectory() as tmp:
         out_json, out_md = Path(tmp, "diff.json"), Path(tmp, "diff.md")
         proc = subprocess.run(
@@ -155,10 +187,19 @@ def cmd_diff_coverage(args: argparse.Namespace) -> int:
     for path, stats in data.get("src_stats", {}).items():
         for line in stats.get("violation_lines", [])[:50]:
             annotate("warning", "changed line not covered by tests", file=path, line=int(line))
+    prefix = gitdiff.repo_prefix() if unmeasured else ""
+    for path in unmeasured:
+        annotate("error", "changed file is missing from the coverage report", file=prefix + path)
     lines = int(data.get("total_num_lines", 0))
     percent = float(data.get("total_percent_covered", 100))
-    passed = lines == 0 or percent >= minimum
+    passed = (lines == 0 or percent >= minimum) and not unmeasured
     detail = f"**{percent:g}%** of {lines} changed coverable lines covered (minimum {minimum:g}%)."
+    if unmeasured:
+        detail += (
+            "\n\nNot measured at all (no test executes them, or coverage is not configured to "
+            "include them, e.g. `[tool.coverage.run] source` or Vitest `coverage.include`):\n\n"
+            + "\n".join(f"- `{p}`" for p in unmeasured)
+        )
     return verdict(
         "Diff coverage",
         passed=passed,
@@ -177,6 +218,13 @@ def cmd_ratchet(args: argparse.Namespace) -> int:
         return 0
     baseline = coverage.read_baseline(args.baseline) if args.baseline else None
     if baseline is None:
+        # Visible, not silent: an evicted cache entry (7 days unused) also lands
+        # here, and a gate that quietly stops checking is worse than a red one.
+        annotate(
+            "warning",
+            "coverage ratchet skipped: no default-branch baseline (first run, or the cache "
+            "entry was evicted; the next push to the default branch saves one)",
+        )
         summary(f"#### ⏭️ Coverage ratchet: no baseline yet (current {current:g}%)")
         return 0
     ok, delta = coverage.ratchet(current, baseline, policy.get("coverage.ratchet_tolerance"))
@@ -195,6 +243,14 @@ def cmd_mutation(args: argparse.Namespace) -> int:
     minimum = policy.get("mutation.min_score")
     lines = gitdiff.changed_lines(args.base) if args.base else None
     tally, lived = mutation.evaluate(args.report, args.format, lines)
+    if tally.inconclusive:
+        return verdict(
+            "Mutation testing",
+            passed=False,
+            detail=f"{tally.invalid} mutants in the changed code got no verdict (compile errors "
+            "or an interrupted run), so the run proves nothing.",
+            waived=_waived(policy, "mutation"),
+        )
     if tally.score is None:
         summary("#### ✅ Mutation testing: no mutants in the changed code")
         return 0
@@ -255,6 +311,48 @@ def cmd_dora(args: argparse.Namespace) -> int:
     return 0
 
 
+# ----------------------------------------------------------------- local
+def cmd_local(args: argparse.Namespace) -> int:
+    inputs = json.loads(os.environ.get("GOLDEN_INPUTS") or "{}")
+    for pair in args.set:
+        key, sep, value = pair.partition("=")
+        if not sep:
+            raise ValueError(f"--set expects KEY=VALUE, got {pair!r}")
+        inputs[key] = value
+    base = args.base if args.base is not None else local.default_base()
+    opts = local.Options(base, args.policy.resolve(), fast=args.fast, mutation=args.mutation)
+    # Judged as CI will judge it: by the policy at the merge-base, tightened by this change.
+    plan_steps = local.steps(args.language, inputs, config.load(args.policy, base=base), opts)
+    if args.dry_run:
+        for step in plan_steps:
+            env = " ".join(f"{k}={v!r}" for k, v in step.env.items())
+            print(f"{step.name}: {env + ' ' if env else ''}{' '.join(step.argv)}")
+        return 0
+    dirty = bool(base) and gitdiff.uncommitted()
+    if dirty:
+        annotate("warning", local.DIRTY)
+    outcomes = local.run(plan_steps)
+    print("\n" + local.render(outcomes, base, dirty=dirty))
+    return 0 if all(o.passed for o in outcomes) else 1
+
+
+def _add_local_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    p = sub.add_parser("local", help="run the pipeline's checks and gates before pushing")
+    p.add_argument("--language", required=True, choices=sorted(plan.DEFAULTS))
+    p.add_argument("--base", help="diff base (default: merge-base with the default branch)")
+    p.add_argument(
+        "--set",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="override a workflow input, e.g. test-command='make test'",
+    )
+    p.add_argument("--fast", action="store_true", help="policy, format, lint, types only")
+    p.add_argument("--mutation", action="store_true", help="also mutate the changed code")
+    p.add_argument("--dry-run", action="store_true", help="print the steps, run nothing")
+    p.set_defaults(func=cmd_local)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="golden", description=__doc__)
     parser.add_argument("--version", action="version", version=f"golden {__version__}")
@@ -285,6 +383,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("diff-coverage", help="gate: changed lines are covered")
     p.add_argument("--base", required=True)
+    p.add_argument(
+        "--preset",
+        choices=sorted(presets.PRESETS),
+        help="also fail when a changed source file is missing from the report",
+    )
     p.add_argument("report", type=Path, nargs="+")
     p.set_defaults(func=cmd_diff_coverage)
 
@@ -306,6 +409,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--root", type=Path, default=Path())
     p.add_argument("--json", type=Path)
     p.set_defaults(func=cmd_scorecard)
+
+    _add_local_parser(sub)
 
     p = sub.add_parser("dora", help="compute DORA metrics from a deployment log")
     p.add_argument("log", type=Path)

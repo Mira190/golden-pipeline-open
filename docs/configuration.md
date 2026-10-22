@@ -21,12 +21,16 @@ The policy is validated in the first job (`golden policy check`), and the effect
 printed to the job summary. Validation fails closed, because a mistake that silently fell back to
 a default would weaken a gate without anyone noticing:
 
-- Unknown sections **and unknown keys** fail validation (`diff_minimum = 95` is an error, not
-  "90").
-- Non-numeric, `nan` and `inf` values fail validation, and so do fractional `repeats` or levels.
+- Unknown sections fail validation, and so do unknown keys inside a known section, so a typo
+  such as `min_scor = 95` can't silently keep the default.
+- Values that aren't finite numbers fail validation (`nan` and `inf` included), and so do
+  fractional `repeats` or levels.
 - Any value weaker than its floor fails with an explanation.
 - Any value beyond "strictest" fails too: `min_level = 5` or `diff_min = 101` could never pass,
   so every change would be blocked forever.
+- `presence.exempt` globs must name something: `**`, `*`, `**/*` and bare extension globs such
+  as `*.py` would exempt a whole language. They are rejected, and a time-boxed
+  `[waivers.test-presence]` is the way to switch the gate off.
 
 ```toml
 [coverage]
@@ -73,7 +77,7 @@ expires = 2026-12-31
 
 - Allowed gates: `diff-coverage`, `coverage-ratchet`, `test-presence`, `mutation`, `scorecard`.
 - `reason` is required.
-- `expires` is a TOML date at most **90 days** ahead.
+- `expires` is a TOML date (not a date-time) at most **90 days** ahead.
 - After expiry the gate is enforced again automatically.
 - While any waiver is active, the scorecard cannot reach L4.
 
@@ -95,6 +99,7 @@ expires = 2026-12-31
 | `mutation-report` / `mutation-format` | per language | format: `mutmut`, `stryker`, `mutation-testing-elements` (alias of `stryker`, for Stryker.NET/Stryker4s), `gremlins` |
 | `mutation` | `true` | set `false` to skip mutation testing; this fails the scorecard's L3 "no gate switched off" control, so prefer a waiver |
 | `security` | `true` | run the nested security workflow; `false` fails the same L3 control |
+| `workflow-lint` | `true` | lint `.github/workflows` with actionlint and shellcheck (in `security`); `false` fails the same L3 control |
 | `skip-presence-label` | `no-tests-needed` | PR label that makes test presence report-only |
 | `runs-on` | `ubuntu-24.04` | runner label |
 | `egress-policy` | `audit` | harden-runner policy; `block` needs an allowlist |

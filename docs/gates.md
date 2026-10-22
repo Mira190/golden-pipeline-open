@@ -13,10 +13,19 @@ pull request. It exits non-zero only when the merge must be blocked. A gate with
 - Passes when the changed coverable lines are covered at `coverage.diff_min` or above (default
   90%, floor 80%), or when the change has no coverable lines (docs, config, comments).
 - Each uncovered changed line gets a warning annotation (up to 50 per file).
+- **Fails closed on unmeasured files.** diff-cover skips files the coverage report doesn't
+  mention, so a new module that no test imports would count as "100% covered". This is the
+  default with pytest-cov when `[tool.coverage.run] source` isn't set, and with Vitest when
+  `coverage.include` isn't set. The gate therefore also fails when a changed source file (per
+  the language preset, minus `presence.exempt`) is missing from the report, and annotates the
+  file.
 
 **Fixing a failure:** write a test that exercises the annotated lines. If a line is genuinely
 untestable (defensive `raise`, platform branch), exclude it the way your coverage tool supports
 (`# pragma: no cover`, `/* v8 ignore next */`). Reviewers see the exclusion in the diff.
+For a file that is *missing from the report*, either test it or configure coverage to measure
+every source file (`source = ["your_package"]`, `coverage.include: ["src/**"]`). If it has no
+runtime code (type declarations, generated code), add a `presence.exempt` glob.
 
 ## Test presence
 
@@ -36,7 +45,9 @@ Ignored automatically: generated code (`*.pb.go`, `*_gen.go`, `*.d.ts`), config 
 
 **Escape hatch:** the PR label `no-tests-needed` (configurable with `skip-presence-label`) makes the
 gate report-only for that PR. This is meant for pure refactors covered by existing tests. The label
-and the report-only verdict are visible to reviewers, and diff coverage still applies.
+and the report-only verdict are visible to reviewers, and diff coverage still applies. Adding or
+removing the label re-runs the pipeline only when the caller's `pull_request` trigger lists the
+`labeled` and `unlabeled` activity types, as the [templates](../templates) do.
 
 ## Coverage ratchet
 
@@ -56,10 +67,10 @@ untouched code (Hilton et al., ASE 2018).
 
 Every changed test file is re-run `flaky.repeats` times (default 10, floor 3) in random order. A
 single failure blocks the merge. Only files a test runner can execute on their own are re-run:
-`test_*.py`, `*_test.py`, `tests.py`; `*.test.*`, `*.spec.*`, `__tests__/**`; `*_test.go`.
+`test_*.py`, `*_test.py`, `tests.py`; `*.test.*`, `*.spec.*`; `*_test.go`.
 A change to a `conftest.py`, a helper or a fixture alone skips the step, because pytest and
-Vitest fail when given a file with no tests in it. Most flaky tests are flaky from the moment they're written
-(Luo et al., FSE 2014), so this is the cheapest point to catch them.
+Vitest fail when given a file with no tests in it. Most flaky tests are flaky from the moment
+they're written (Luo et al., FSE 2014), so this is the cheapest point to catch them.
 
 | Language | Default re-run |
 |---|---|
@@ -121,7 +132,7 @@ signal (89%).
 |---|---|
 | **L1 Adopted** | CI on `pull_request` (not `pull_request_target`) · calls `golden.yml` · dependencies locked (lockfiles under `node_modules/`, `vendor/`, `.venv/` don't count) |
 | **L2 Owned** | CODEOWNERS · Dependabot/Renovate (any of its config locations) · SECURITY.md |
-| **L3 Enforced** | ruleset requires the `golden` check · ruleset requires an approval · **ruleset requires code-owner review, and CODEOWNERS owns `.github/workflows/` and the `golden.toml` in use** · force-push and deletion blocked · every action pinned to a SHA · every workflow's top-level `permissions:` is read-only (`write-all` or a top-level `write` scope fails; grant writes per job) · **no gate switched off in the caller (`mutation: false`, `security: false`)** · dependency cooldown configured |
+| **L3 Enforced** | ruleset requires the `golden` check · ruleset requires an approval · **ruleset requires code-owner review, and CODEOWNERS owns `.github/workflows/` and the `golden.toml` in use** · force-push and deletion blocked · every action pinned to a SHA · every workflow's top-level `permissions:` is read-only (`write-all` or a top-level `write` scope fails; grant writes per job) · **no gate switched off in the caller (`mutation`, `security` or `workflow-lint: false`)** · dependency cooldown configured |
 | **L4 Verified** | release artifacts carry signed provenance (an `actions/attest*` step or a `container.yml` call) · OpenSSF Scorecard runs (an `ossf/scorecard-action` step) · no active waivers |
 
 Workflow files are read with YAML comments removed, and step-based controls look at `uses:`
@@ -147,6 +158,7 @@ the gates read it from the pull request's base commit, so a PR cannot loosen it 
 | Vulnerable dependencies | OSV-Scanner 2.7 over every lockfile in the project directory | any known vulnerability |
 | New dependencies in the PR | dependency-review-action | severity ≥ `high` (configurable); licences outside `allow-licenses` if set |
 | Workflow security | zizmor 1.30 (`regular` persona) | any finding (template injection, excessive permissions, unpinned actions, cache poisoning, …) |
+| Workflow correctness | actionlint 1.7.12 with shellcheck (digest-pinned image) | any finding (invalid expressions, unknown inputs, shell bugs in `run:`); input `workflow-lint` |
 | Go reachability | govulncheck 1.9 (in the Go lint step) | a reachable vulnerable symbol |
 
 ## Verdict

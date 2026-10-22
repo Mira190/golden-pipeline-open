@@ -35,7 +35,7 @@ USES = re.compile(r"^\s*(?:-\s*)?uses:\s*['\"]?([^\s'\"#]+)", re.MULTILINE)
 # The `pull_request` trigger, not `pull_request_target` or `github.event.pull_request`.
 PR_TRIGGER = re.compile(r"(?<![\w.'\"-])pull_request(?![\w-])")
 YAML_COMMENT = re.compile(r"(^|\s)#.*$", re.MULTILINE)
-DISABLED_GATE = re.compile(r"^\s*(mutation|security)\s*:\s*false\b", re.MULTILINE)
+DISABLED_GATE = re.compile(r"^\s*(mutation|security|workflow-lint)\s*:\s*false\b", re.MULTILINE)
 DEPS_BOT_FILES = (
     ".github/dependabot.yml",
     ".github/dependabot.yaml",
@@ -111,7 +111,8 @@ def _all_text(repo: Repo) -> str:
     return "\n".join(repo.workflows().values())
 
 
-def _refs(repo: Repo) -> list[str]:
+def _uses(repo: Repo) -> list[str]:
+    """Every `uses:` reference; a mention in a comment or string satisfies no control."""
     return USES.findall(_all_text(repo))
 
 
@@ -120,7 +121,7 @@ def runs_on_prs(repo: Repo) -> bool:
 
 
 def uses_golden(repo: Repo) -> bool:
-    return GOLDEN_WORKFLOW.search(_all_text(repo)) is not None
+    return any(GOLDEN_WORKFLOW.search(u) for u in _uses(repo))
 
 
 def has_lockfile(repo: Repo) -> bool:
@@ -150,7 +151,7 @@ def dependency_cooldown(repo: Repo) -> bool:
 
 
 def actions_pinned(repo: Repo) -> bool:
-    refs = [u for u in _refs(repo) if not u.startswith(("./", "$/", "docker://"))]
+    refs = [u for u in _uses(repo) if not u.startswith(("./", "$/", "docker://"))]
     return all(SHA_REF.search(u) for u in refs)
 
 
@@ -188,13 +189,14 @@ def gates_enabled(repo: Repo) -> bool:
 
 def provenance(repo: Repo) -> bool:
     return any(
-        "actions/attest" in u or u.split("@")[0].endswith("/.github/workflows/container.yml")
-        for u in _refs(repo)
+        u.startswith("actions/attest")
+        or u.split("@")[0].endswith("/.github/workflows/container.yml")
+        for u in _uses(repo)
     )
 
 
 def ossf_scorecard(repo: Repo) -> bool:
-    return any(u.startswith("ossf/scorecard-action@") for u in _refs(repo))
+    return any(u.startswith("ossf/scorecard-action@") for u in _uses(repo))
 
 
 def no_active_waivers(repo: Repo) -> bool:

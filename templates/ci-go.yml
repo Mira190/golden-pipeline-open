@@ -4,6 +4,8 @@ name: ci
 
 on:
   pull_request:
+    # labeled/unlabeled: the test-presence opt-out label takes effect at once.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   push:
     branches: [main]
   merge_group:

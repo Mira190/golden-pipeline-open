@@ -108,12 +108,20 @@ jobs:
       attestations: write
     outputs:
       digest: ${{ steps.push.outputs.digest }}
-    env:
-      IMAGE: ghcr.io/${{ github.repository_owner }}/${{ inputs.image || github.event.repository.name }}
     steps:
       - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
         with:
           egress-policy: ${{ inputs.egress-policy }}
+      # OCI references must be lowercase; owners like `Mira190` are not. The
+      # push itself works (metadata-action lowercases tags) but SBOM and
+      # attestation steps would then fail on the mixed-case name.
+      - name: Image name
+        env:
+          OWNER: ${{ github.repository_owner }}
+          NAME: ${{ inputs.image || github.event.repository.name }}
+        run: |
+          image="ghcr.io/$OWNER/$NAME"
+          echo "IMAGE=${image,,}" >> "$GITHUB_ENV"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false

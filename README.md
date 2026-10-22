@@ -9,6 +9,8 @@ and its own code is tested to the same bar it enforces.
 name: ci
 on:
   pull_request:
+    # labeled/unlabeled: the test-presence opt-out label takes effect at once.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   push:
     branches: [main]
   merge_group:
@@ -36,7 +38,7 @@ Then require the single status check **`ci / golden`** in a branch ruleset. That
 | **Coverage ratchet** | total coverage never drops more than 0.5 pp below the default branch | same | same |
 | **Flake gate** | changed tests re-run 10× and must pass every time | same | same |
 | **Mutation testing** | mutmut, scoped to changed functions | StrykerJS, scoped to changed lines | gremlins, scoped to changed lines |
-| Supply chain | gitleaks, OSV-Scanner, dependency review, zizmor | same | same, plus govulncheck |
+| Supply chain | gitleaks, OSV-Scanner, dependency review, zizmor, actionlint | same | same, plus govulncheck |
 | Repository scorecard | maturity level L1–L4 (rulesets, pinning, owners, cooldowns) | same | same |
 | Container (optional) | build → smoke test → SBOM → grype → signed SLSA provenance | same | same |
 
@@ -53,7 +55,8 @@ Coverage alone can be gamed (see the [drills](docs/evaluation.md#3-drills-does-e
 
 - **Evidence-based.** The design follows published practice from Google, Meta, Amazon, Microsoft, Uber and Shopify, and the academic literature on coverage, mutation testing and flakiness ([research](docs/research.md)).
 - **Dogfooded.** This repository is gated by its own workflows. The `golden` CLI and three example projects ([Python](examples/python), [TypeScript](examples/node), [Go](examples/go)) all run through `golden.yml` on every change. The CLI has 99% branch coverage and passes its own 80% mutation bar.
-- **Fails closed.** A missing report, a mutation run where most mutants time out, or a weakened threshold fails the gate instead of passing quietly.
+- **Fails closed.** A missing or empty report, a source file the coverage report never measured, a mutation run where most mutants time out or none get a verdict, or a weakened threshold fails the gate instead of passing quietly.
+- **Shift left.** `golden local --language python` runs the same commands and the same gate code on a laptop or inside a coding agent's loop, before the push. It is also available as pre-commit hooks pinned to the same SHA ([adoption](docs/adoption.md#5-shift-left-the-same-verdict-before-you-push)).
 - **Hardened for 2025–2026 supply-chain attacks:**
   - every action pinned to a commit SHA
   - `permissions: {}` by default

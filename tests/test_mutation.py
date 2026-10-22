@@ -177,6 +177,13 @@ def test_relative(tmp_path, monkeypatch, name, root, expected):
     assert mutation._relative(name, root) == expected
 
 
+def test_stryker_counts_mutants_without_a_verdict(tmp_path):
+    path = write(tmp_path, stryker("Killed", "CompileError", "RuntimeError", "Pending", "Ignored"))
+    tally, _ = mutation.evaluate(path, "stryker")
+    assert tally == mutation.Tally(killed=1, invalid=3)
+    assert not tally.inconclusive
+
+
 @pytest.mark.parametrize(
     ("fmt", "data"),
     [
@@ -192,3 +199,50 @@ def test_relative(tmp_path, monkeypatch, name, root, expected):
 def test_malformed_report_fails_closed(tmp_path, fmt, data):
     with pytest.raises(ValueError, match=f"malformed {fmt} report"):
         mutation.evaluate(write(tmp_path, data), fmt)
+
+
+@pytest.mark.parametrize(
+    ("fmt", "data"),
+    [
+        ("stryker", stryker("CompileError", "CompileError")),
+        ("gremlins", gremlins("NOT VIABLE")),
+    ],
+)
+def test_run_without_any_verdict_is_inconclusive(tmp_path, fmt, data):
+    tally, _ = mutation.evaluate(write(tmp_path, data), fmt)
+    assert tally.score is None
+    assert tally.inconclusive
+
+
+@pytest.mark.parametrize(
+    ("fmt", "data"), [("stryker", stryker("Ignored")), ("gremlins", gremlins("SKIPPED"))]
+)
+def test_deliberately_ignored_mutants_are_not_inconclusive(tmp_path, fmt, data):
+    assert not mutation.evaluate(write(tmp_path, data), fmt)[0].inconclusive
+
+
+def test_interrupted_mutmut_run_fails_closed(tmp_path):
+    path = write(tmp_path, {"killed": 3, "check_was_interrupted_by_user": 1})
+    with pytest.raises(ValueError, match="interrupted"):
+        mutation.evaluate(path, "mutmut")
+
+
+@pytest.mark.parametrize("name", ["./pricing/pricing.go", "{cwd}/pricing/pricing.go"])
+def test_report_paths_are_normalised_before_filtering(tmp_path, monkeypatch, name):
+    monkeypatch.chdir(tmp_path)
+    data = gremlins("LIVED")
+    data["files"][0]["file_name"] = name.format(cwd=tmp_path)
+    tally, _ = mutation.evaluate(
+        write(tmp_path, data), "gremlins", {"pricing/pricing.go": [(1, 1)]}
+    )
+    assert tally.survived == 1
+
+
+def test_absolute_path_outside_cwd_is_kept(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    data = gremlins("LIVED")
+    data["files"][0]["file_name"] = "/elsewhere/pricing.go"
+    tally, _ = mutation.evaluate(
+        write(tmp_path, data), "gremlins", {"/elsewhere/pricing.go": [(1, 1)]}
+    )
+    assert tally.survived == 1
