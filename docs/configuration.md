@@ -173,6 +173,75 @@ Requirements: a `go.mod`. A `.golangci.yml` (config `version: "2"`) is recommend
 Inputs: `working-directory`, `fail-on-severity` (`high`), `allow-licenses` (empty = no licence
 gate), `runs-on`, `egress-policy`. It needs only `contents: read`.
 
+#### Known vulnerabilities (OSV)
+
+OSV-Scanner scans every lockfile under `working-directory` (`--recursive`). What blocks depends on
+the event that triggered the caller:
+
+| Event | Scan | Blocks on |
+|---|---|---|
+| `pull_request`, `merge_group` | the base commit (`pull_request.base.sha` or `merge_group.base_sha`) and the change, diffed | a vulnerability in the change that is not in the base |
+| `push`, `schedule`, `workflow_dispatch` | the checked-out commit | every known vulnerability not excepted in `osv-scanner.toml` |
+
+On pull requests the job summary also lists the vulnerabilities that were already in the base, so
+nothing is hidden. See [what the gate does](gates.md#vulnerable-dependencies-what-the-change-adds-then-everything).
+
+Requirements and behaviour:
+
+- On pull requests and in the merge queue the checkout fetches full history, so the base commit is
+  available. The runner needs `jq`, which GitHub-hosted runners include.
+- A project with no lockfiles passes. A change that creates the project (no lockfiles or no
+  `working-directory` in the base) counts everything in the change as new.
+- A scan that cannot complete is an error. A missing results file, or a head scan that failed
+  without reporting anything (an unparsable lockfile), never reads as "nothing new".
+- Advisories published after a merge are caught by the default-branch run, so call the workflow
+  from a schedule as well. The file header shows standalone use; a nightly caller is:
+
+```yaml
+name: security-nightly
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+permissions: {}
+jobs:
+  security:
+    permissions:
+      contents: read
+    uses: Mira190/golden-pipeline-open/.github/workflows/security.yml@<sha> # v1.x.y
+```
+
+#### osv-scanner.toml
+
+Exceptions are read natively by OSV-Scanner from an `osv-scanner.toml` in the **same directory as
+the lockfile**. The file applies to that directory only, not to child directories, so a monorepo
+needs one next to each lockfile it excepts.
+
+```toml
+# osv-scanner.toml, next to package-lock.json
+[[IgnoredVulns]]
+id = "GHSA-xxxx-xxxx-xxxx"   # aliases of this ID are ignored with it
+ignoreUntil = 2026-12-31     # TOML date; after it the vulnerability blocks again
+reason = "Not reachable: we never parse untrusted input with this library. Tracked in PLAT-123."
+```
+
+This is the same reason-plus-expiry model as a [`golden.toml` waiver](#waivers), where `expires`
+may be at most 90 days ahead. OSV-Scanner does not enforce that, and treats `reason` and
+`ignoreUntil` as optional, so:
+
+- Always set both. Without `ignoreUntil` the exception never expires.
+- Keep `ignoreUntil` within 90 days of the change that adds it.
+- Put `osv-scanner.toml` behind CODEOWNERS, next to `golden.toml`. The change's own file is what
+  the scan reads, so a pull request that adds an exception for a vulnerability it introduces
+  passes the gate. Review is the control.
+- `[[PackageOverrides]]` (`ignore = true`, `effectiveUntil = ...`) silences findings too. Review
+  it the same way.
+- An invalid file is ignored with an error, so its exceptions stop applying and the vulnerabilities
+  come back.
+
+Once an exception expires, the vulnerability blocks the default-branch run again. On pull requests
+it is a pre-existing vulnerability: listed in the summary, not blocking.
+
 ### container.yml
 
 Inputs:

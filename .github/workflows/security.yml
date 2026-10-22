@@ -4,6 +4,12 @@
 #   jobs:
 #     security:
 #       uses: Mira190/golden-pipeline-open/.github/workflows/security.yml@<sha> # v1.x.y
+#
+# Known vulnerabilities (OSV) follow the Google model. A pull request or merge
+# queue entry blocks only on vulnerabilities the change introduces (base commit
+# scanned, head scanned, results diffed), so a new advisory never turns an
+# unrelated PR red. The default branch (push, schedule, manual run) blocks on
+# every known vulnerability. Time-boxed exceptions live in osv-scanner.toml.
 name: golden-security
 
 on:
@@ -63,22 +69,205 @@ jobs:
   dependencies:
     name: dependencies
     runs-on: ${{ inputs.runs-on }}
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
       contents: read
+    env:
+      # Pull requests and merge queue entries are diffed against their base
+      # commit. Everything else (push, schedule, workflow_dispatch) is not.
+      DIFF_MODE: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
     steps:
       - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
         with:
           egress-policy: ${{ inputs.egress-policy }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # The diff needs the base commit in the clone. Credentials are used
+          # by this fetch and then dropped, so a later `git fetch` could not
+          # authenticate. Strings, not numbers: 0 is falsy in `&& ... ||`.
+          fetch-depth: ${{ env.DIFF_MODE == 'true' && '0' || '1' }}
           persist-credentials: false
+
+      # Default branch, schedule, manual run: every known vulnerability blocks.
+      # --allow-no-lockfiles makes a project without lockfiles a pass (exit 0)
+      # instead of the deprecated exit-128 workaround in the action wrapper.
       - name: Known vulnerabilities in lockfiles (OSV)
+        if: env.DIFF_MODE != 'true'
         uses: google/osv-scanner-action/osv-scanner-action@b1d267aea5211fa648d9d442fa64b90dbdcbdd36 # v2.7.0
         with:
           scan-args: |-
             --recursive
+            --allow-no-lockfiles
             ${{ inputs.working-directory }}
+
+      # Pull request, merge queue: scan the base commit, scan this change, and
+      # block only on what the change adds. Results live in .git/, a path no
+      # tracked file can occupy, so a pull request cannot supply or overwrite
+      # them. The scan steps continue on error because osv-scanner exits 1 when
+      # it finds vulnerabilities (a failed step with a green job is expected);
+      # the validation step and the reporter decide.
+      - name: Check out the base commit
+        id: base
+        if: env.DIFF_MODE == 'true'
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          TARGET: ${{ inputs.working-directory }}
+        run: |
+          set -euo pipefail
+          if [ -z "$BASE" ]; then
+            echo "::error::This event has no base commit, so new vulnerabilities cannot be told from existing ones."
+            exit 1
+          fi
+          if ! git rev-parse --verify --quiet "$BASE^{commit}" > /dev/null; then
+            echo "::error::Base commit $BASE is not in the clone."
+            exit 1
+          fi
+          echo "head=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          rm -rf .git/osv-results
+          mkdir .git/osv-results
+          git checkout --quiet --force --detach "$BASE"
+          # A project that is new in this change has no directory in the base.
+          # An empty one scans as "no lockfiles", so the whole head counts as new.
+          mkdir -p -- "$TARGET"
+      - name: Scan the base commit (OSV)
+        if: env.DIFF_MODE == 'true'
+        continue-on-error: true
+        uses: google/osv-scanner-action/osv-scanner-action@b1d267aea5211fa648d9d442fa64b90dbdcbdd36 # v2.7.0
+        with:
+          scan-args: |-
+            --recursive
+            --allow-no-lockfiles
+            --format=json
+            --output-file=.git/osv-results/old-results.json
+            ${{ inputs.working-directory }}
+      - name: Check out this change again
+        if: env.DIFF_MODE == 'true'
+        env:
+          HEAD_SHA: ${{ steps.base.outputs.head }}
+        run: |
+          set -euo pipefail
+          if [ -z "$HEAD_SHA" ]; then
+            echo "::error::The checked-out commit was not recorded."
+            exit 1
+          fi
+          git checkout --quiet --force --detach "$HEAD_SHA"
+      - name: Scan this change (OSV)
+        id: scan-head
+        if: env.DIFF_MODE == 'true'
+        continue-on-error: true
+        uses: google/osv-scanner-action/osv-scanner-action@b1d267aea5211fa648d9d442fa64b90dbdcbdd36 # v2.7.0
+        with:
+          scan-args: |-
+            --recursive
+            --allow-no-lockfiles
+            --format=json
+            --output-file=.git/osv-results/new-results.json
+            ${{ inputs.working-directory }}
+      # The reporter reads a missing or unparsable --new file as "no new
+      # vulnerabilities" and exits 0, so a scan that broke would pass. Fail
+      # closed. osv-scanner exits 1 when it reports something and 127, 129 or
+      # 130 when it failed, and a failure can still leave an empty results file
+      # (an unparsable lockfile does). So a failed head scan must have reported
+      # something. A broken base only makes more of the head look new, never
+      # fewer, so the base needs a readable file and nothing more.
+      - name: Check that both scans completed
+        if: env.DIFF_MODE == 'true'
+        env:
+          HEAD_OUTCOME: ${{ steps.scan-head.outcome }}
+        run: |
+          set -euo pipefail
+          if ! command -v jq > /dev/null; then
+            echo "::error::jq is required on the runner to validate the scan results."
+            exit 1
+          fi
+          status=0
+          for name in old new; do
+            file=".git/osv-results/$name-results.json"
+            if [ ! -s "$file" ] || ! jq -e '.results | type == "array"' "$file" > /dev/null; then
+              echo "::error::OSV-Scanner wrote no valid results for the $name scan ($file). See the scan step's log."
+              status=1
+            fi
+          done
+          if [ "$status" -eq 0 ] && [ "$HEAD_OUTCOME" != "success" ] \
+            && jq -e '.results | length == 0' .git/osv-results/new-results.json > /dev/null; then
+            echo "::error::OSV-Scanner failed on this change without reporting a vulnerability, for example on an unparsable lockfile. See the scan step's log."
+            status=1
+          fi
+          if [ "$status" -ne 0 ]; then
+            echo "::error::A scan did not complete, so the results cannot be compared. Failing instead of reporting no new vulnerabilities."
+          fi
+          exit "$status"
+      - name: New vulnerabilities in this change (OSV)
+        id: introduced
+        if: env.DIFF_MODE == 'true'
+        uses: google/osv-scanner-action/osv-reporter-action@b1d267aea5211fa648d9d442fa64b90dbdcbdd36 # v2.7.0
+        with:
+          scan-args: |-
+            --old=.git/osv-results/old-results.json
+            --new=.git/osv-results/new-results.json
+            --output-files=json:.git/osv-results/introduced.json
+            --output-files=markdown:.git/osv-results/introduced.md
+            --gh-annotations=true
+            --fail-on-vuln=true
+      # Visibility, never a gate: the vulnerabilities in this revision that the
+      # change did not introduce (the head minus the introduced set). Pre-existing
+      # ones are not hidden, only not blocking. It runs after a failing step
+      # above too, so the author sees both lists in one run.
+      - name: Vulnerabilities already present in the base (OSV, not blocking)
+        id: existing
+        if: ${{ !cancelled() && steps.introduced.outcome != 'skipped' }}
+        continue-on-error: true
+        uses: google/osv-scanner-action/osv-reporter-action@b1d267aea5211fa648d9d442fa64b90dbdcbdd36 # v2.7.0
+        with:
+          scan-args: |-
+            --old=.git/osv-results/introduced.json
+            --new=.git/osv-results/new-results.json
+            --output-files=json:.git/osv-results/existing.json
+            --output-files=markdown:.git/osv-results/existing.md
+            --fail-on-vuln=false
+      - name: Summarize vulnerabilities
+        if: ${{ !cancelled() && env.DIFF_MODE == 'true' }}
+        continue-on-error: true
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: |
+          set -euo pipefail
+          dir=.git/osv-results
+          # Keep the summary well under GitHub's 1 MiB limit; the step logs have the full tables.
+          show() {
+            if [ ! -s "$1" ]; then
+              echo "_Not available. See the step log._"
+              return
+            fi
+            head -c 300000 "$1"
+            if [ "$(wc -c < "$1")" -gt 300000 ]; then
+              printf '\n\n_Truncated. The step log has the full table._\n'
+            fi
+          }
+          {
+            echo "## Dependency vulnerabilities (OSV)"
+            echo
+            echo "Compared with base commit \`${BASE:0:12}\`. Only vulnerabilities this change introduces block the merge."
+            echo
+            echo "### Introduced by this change"
+            show "$dir/introduced.md"
+            echo
+            echo "### Already present in the base (not blocking)"
+            if [ -s "$dir/introduced.json" ]; then
+              show "$dir/existing.md"
+            else
+              echo "_Not available. See the step log._"
+            fi
+            echo
+            echo "Every known vulnerability blocks on the default branch. Time-boxed exceptions go in \`osv-scanner.toml\` next to the lockfile."
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ -s "$dir/introduced.json" ] && [ -s "$dir/existing.json" ]; then
+            count=$(jq '[.results[]?.packages[]?.groups[]?] | length' "$dir/existing.json")
+            if [ "$count" -gt 0 ]; then
+              echo "::warning title=Known vulnerabilities already present::$count known vulnerabilities were already in the base commit and do not block this change. They are listed in the job summary and block on the default branch."
+            fi
+          fi
+
       - name: New dependencies in this pull request
         if: github.event_name == 'pull_request'
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
