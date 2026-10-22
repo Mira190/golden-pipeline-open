@@ -99,6 +99,8 @@ exclude_also = ["if __name__ == .__main__.:", "raise NotImplementedError"]
 [tool.mutmut]
 source_paths = ["src/golden/"]
 pytest_add_cli_args = ["-p", "no:randomly", "-x", "-q"]
+# tests/test_evals.py replays the benchmark in evals/ against the mutated package.
+also_copy = ["evals/"]
 # "Arid" lines (Google, TSE 2021): mutating them yields no actionable test.
 do_not_mutate_patterns = [
     'help="',                          # argparse help text

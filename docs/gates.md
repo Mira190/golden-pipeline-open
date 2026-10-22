@@ -26,8 +26,8 @@ Every changed source file needs at least one *changed* test file in the same PR 
 
 | Language | A test references `src/x.ext` when… |
 |---|---|
-| Python | the test imports or mentions the dotted module (`pkg.x`), or the module name as a word |
-| Node | the test is named `x.test.*` / `x.spec.*`, or imports a path ending in `/x` (with or without extension) |
+| Python | the test imports the module (absolute or relative: `from .x import`, `from .. import x`), or its code mentions the dotted module (`pkg.x`, also inside strings such as `mock.patch("pkg.x.f")`) or the module name as a word. Comments don't count. |
+| Node | the test is named `x.test.*` / `x.spec.*`, or imports a path ending in `/x` (with or without extension; `order.service.ts` needs `/order.service`; `cart/index.ts` accepts `/cart` and `/cart/index`) |
 | Go | the test file lives in the same package directory |
 
 Ignored automatically: generated code (`*.pb.go`, `*_gen.go`, `*.d.ts`), config files, `vendor/`,
@@ -55,7 +55,10 @@ untouched code (Hilton et al., ASE 2018).
 **Question:** are the new tests trustworthy?
 
 Every changed test file is re-run `flaky.repeats` times (default 10, floor 3) in random order. A
-single failure blocks the merge. Most flaky tests are flaky from the moment they're written
+single failure blocks the merge. Only files a test runner can execute on their own are re-run:
+`test_*.py`, `*_test.py`, `tests.py`; `*.test.*`, `*.spec.*`, `__tests__/**`; `*_test.go`.
+A change to a `conftest.py`, a helper or a fixture alone skips the step, because pytest and
+Vitest fail when given a file with no tests in it. Most flaky tests are flaky from the moment they're written
 (Luo et al., FSE 2014), so this is the cheapest point to catch them.
 
 | Language | Default re-run |
@@ -85,9 +88,15 @@ Stryker's, applied to all three tools so the number means the same thing everywh
 | Node | StrykerJS 10 | changed line ranges → `stryker run --mutate "src/a.ts:10-25,…"` |
 | Go | gremlins 0.6 | whole module, then `golden mutation --base` keeps mutants on changed lines |
 
+Any report in the [mutation-testing-elements](https://github.com/stryker-mutator/mutation-testing-elements)
+schema works with `--format mutation-testing-elements` (an alias of `stryker`): StrykerJS,
+Stryker.NET and Stryker4s emit it. Absolute file paths in the report are made relative to its
+`projectRoot` or the working directory before filtering by the diff.
+
 **Fails closed:**
 
 - A missing report is an error ("did the mutation tool run?").
+- A malformed report (a mutant without a location, a wrong type) is an error, never "no mutants".
 - A run where more than half of the mutants time out is marked unreliable and fails. The fix is
   to raise the tool's timeout.
 
@@ -105,19 +114,30 @@ signal (89%).
 
 **Question:** is the repository set up so that the gates can't be bypassed?
 
-`golden scorecard` checks 15 controls in four cumulative levels and fails below
+`golden scorecard` checks 17 controls in four cumulative levels and fails below
 `scorecard.min_level` (default 2):
 
 | Level | Controls |
 |---|---|
-| **L1 Adopted** | CI on pull requests · calls `golden.yml` · dependencies locked |
-| **L2 Owned** | CODEOWNERS · Dependabot/Renovate · SECURITY.md |
-| **L3 Enforced** | ruleset requires the `golden` check · ruleset requires an approval · force-push and deletion blocked · every action pinned to a SHA · every workflow declares `permissions:` · dependency cooldown configured |
-| **L4 Verified** | release artifacts carry signed provenance · OpenSSF Scorecard runs · no active waivers |
+| **L1 Adopted** | CI on `pull_request` (not `pull_request_target`) · calls `golden.yml` · dependencies locked (lockfiles under `node_modules/`, `vendor/`, `.venv/` don't count) |
+| **L2 Owned** | CODEOWNERS · Dependabot/Renovate (any of its config locations) · SECURITY.md |
+| **L3 Enforced** | ruleset requires the `golden` check · ruleset requires an approval · **ruleset requires code-owner review, and CODEOWNERS owns `.github/workflows/` and the `golden.toml` in use** · force-push and deletion blocked · every action pinned to a SHA · every workflow's top-level `permissions:` is read-only (`write-all` or a top-level `write` scope fails; grant writes per job) · **no gate switched off in the caller (`mutation: false`, `security: false`)** · dependency cooldown configured |
+| **L4 Verified** | release artifacts carry signed provenance (an `actions/attest*` step or a `container.yml` call) · OpenSSF Scorecard runs (an `ossf/scorecard-action` step) · no active waivers |
+
+Workflow files are read with YAML comments removed, and step-based controls look at `uses:`
+references, so a commented-out line or a mention in a `run:` script never satisfies a control.
 
 The ruleset controls are read from the GitHub API (`GET /repos/{repo}/rules/branches/{branch}`,
 which works with `contents: read`). When the API isn't reachable they show **unknown**, and
 unknown never counts as a pass.
+
+**Why code-owner review is an L3 control.** On a `pull_request` event GitHub runs the
+workflow file *from the pull request*. A PR can therefore edit its own `ci.yml` to switch a gate
+off or replace `test-command`, and the `golden` check still goes green. Only a ruleset that
+requires a code owner's approval for `.github/workflows/` (or an organisation ruleset that
+requires the workflow from a central repository) closes that path. `golden.toml` is different:
+the gates read it from the pull request's base commit, so a PR cannot loosen it for itself
+(see [configuration](configuration.md#a-change-never-grades-itself)).
 
 ## Security (nested workflow)
 

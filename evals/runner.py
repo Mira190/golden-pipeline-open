@@ -41,8 +41,10 @@ from typing import Any
 ROOT = Path(__file__).resolve().parent.parent
 SCENARIOS = ROOT / "evals" / "scenarios"
 EXIT = {0: "pass", 1: "block", 2: "error"}
-# Environment the CLI would otherwise pick up from the machine running the eval.
+# Environment the CLI would otherwise pick up from the machine running the eval
+# (including mutmut's trampoline switch when the suite runs under mutation testing).
 SCRUB = (
+    "MUTANT_UNDER_TEST",
     "GITHUB_OUTPUT",
     "GITHUB_STEP_SUMMARY",
     "GITHUB_REPOSITORY",
@@ -154,7 +156,7 @@ def _env(s: Scenario, tmp: Path, values: dict[str, str]) -> dict[str, str]:
     env = {
         k: v
         for k, v in os.environ.items()
-        if k not in SCRUB and not k.startswith(("RUNNER_", "PYTEST_", "COV_CORE_"))
+        if k not in SCRUB and not k.startswith(("RUNNER_", "PYTEST_", "COV_CORE_", "MUTMUT_"))
     }
     labels = [{"name": n} for n in s.labels]
     event = {"pull_request": {"base": {"sha": values["base"]}, "labels": labels}}

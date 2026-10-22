@@ -8,21 +8,25 @@ There are two layers:
 
 ## golden.toml
 
-| Key | Default | Floor | Meaning |
-|---|---|---|---|
-| `coverage.diff_min` | 90 | ≥ 80 | minimum % of changed coverable lines covered |
-| `coverage.ratchet_tolerance` | 0.5 | ≤ 2 | allowed drop in total coverage (percentage points) vs the default branch |
-| `mutation.min_score` | 80 | ≥ 60 | minimum mutation score on changed code |
-| `flaky.repeats` | 10 | ≥ 3 | times each changed test is re-run |
-| `scorecard.min_level` | 2 | ≥ 1 | minimum repository maturity level |
-| `presence.exempt` | `[]` | – | extra globs excluded from the test-presence gate and mutation |
+| Key | Default | Floor | Strictest | Meaning |
+|---|---|---|---|---|
+| `coverage.diff_min` | 90 | ≥ 80 | ≤ 100 | minimum % of changed coverable lines covered |
+| `coverage.ratchet_tolerance` | 0.5 | ≤ 2 | ≥ 0 | allowed drop in total coverage (percentage points) vs the default branch |
+| `mutation.min_score` | 80 | ≥ 60 | ≤ 100 | minimum mutation score on changed code |
+| `flaky.repeats` | 10 | ≥ 3 | ≤ 100 | times each changed test is re-run (whole number) |
+| `scorecard.min_level` | 2 | ≥ 1 | ≤ 4 | minimum repository maturity level (whole number) |
+| `presence.exempt` | `[]` | – | – | extra globs excluded from the test-presence gate and mutation |
 
 The policy is validated in the first job (`golden policy check`), and the effective values are
-printed to the job summary:
+printed to the job summary. Validation fails closed, because a mistake that silently fell back to
+a default would weaken a gate without anyone noticing:
 
-- Unknown sections fail validation.
-- Non-numeric values fail validation.
+- Unknown sections **and unknown keys** fail validation (`diff_minimum = 95` is an error, not
+  "90").
+- Non-numeric, `nan` and `inf` values fail validation, and so do fractional `repeats` or levels.
 - Any value weaker than its floor fails with an explanation.
+- Any value beyond "strictest" fails too: `min_level = 5` or `diff_min = 101` could never pass,
+  so every change would be blocked forever.
 
 ```toml
 [coverage]
@@ -37,6 +41,25 @@ exempt = ["src/generated/**", "**/legacy_adapter.py"]
 ```
 
 Protect the file with CODEOWNERS, so changes to the bar get the same review as code.
+
+### A change never grades itself
+
+On a pull request (and in the merge queue) every gate reads `golden.toml` as it is on the
+**base commit**, then lets the change tighten it but never loosen it:
+
+| The pull request… | Applies to this pull request? |
+|---|---|
+| raises a threshold, shortens a waiver, removes a waiver or an exemption | yes, immediately |
+| lowers a threshold (still above the floor) | no: the merged value applies until it is merged |
+| adds or extends a waiver | no: the merged waiver (or none) applies |
+| adds a `presence.exempt` glob | no |
+| deletes `golden.toml` | no: the merged values still apply |
+
+What was deferred is listed under **Not applied to this change** in the policy summary and as a
+notice annotation. The base comes from `--base` or, in Actions, from the triggering event; on a
+push to the default branch there is no base and the file is read as is. If the merged file is
+itself invalid under the current rules (for example after a platform floor was raised), the
+pull request that repairs it is judged by its own policy.
 
 ### Waivers
 
@@ -69,9 +92,9 @@ expires = 2026-12-31
 | `coverage-report` | per language | path relative to `working-directory` |
 | `flaky-command` | per language | receives `$GOLDEN_TESTS`, `$GOLDEN_TEST_PACKAGES`, `$GOLDEN_REPEATS` |
 | `mutation-command` | per language | receives `$GOLDEN_MUTATE`, `$GOLDEN_BASE` |
-| `mutation-report` / `mutation-format` | per language | format: `mutmut`, `stryker`, `gremlins` |
-| `mutation` | `true` | set `false` to skip mutation testing (a waiver is usually better) |
-| `security` | `true` | run the nested security workflow |
+| `mutation-report` / `mutation-format` | per language | format: `mutmut`, `stryker`, `mutation-testing-elements` (alias of `stryker`, for Stryker.NET/Stryker4s), `gremlins` |
+| `mutation` | `true` | set `false` to skip mutation testing; this fails the scorecard's L3 "no gate switched off" control, so prefer a waiver |
+| `security` | `true` | run the nested security workflow; `false` fails the same L3 control |
 | `skip-presence-label` | `no-tests-needed` | PR label that makes test presence report-only |
 | `runs-on` | `ubuntu-24.04` | runner label |
 | `egress-policy` | `audit` | harden-runner policy; `block` needs an allowlist |
