@@ -277,8 +277,12 @@ and its findings do not appear in the Security tab. Keep a separate `codeql.yml`
 them there.
 
 Call `sast.yml` as its own job next to `golden.yml`, not from inside it. It needs `actions: read`,
-which callers of `golden.yml` don't grant. To make it block merges, add the job to the required
-checks, or have your aggregating job `need` it.
+which callers of `golden.yml` don't grant. To make it block merges, have your aggregating job
+`need` it, as [`templates/ci-container.yml`](../templates/ci-container.yml) does, or add it to the
+required checks. A Go project needs `build-mode: autobuild`. Run one job per language, for
+example with a matrix, as this repository's `ci.yml` does. If you also keep a `codeql.yml` that
+uploads to code scanning, run it on pushes to the default branch and on a schedule only. That
+way CodeQL doesn't run twice per pull request.
 
 | Input | Default | Notes |
 |---|---|---|

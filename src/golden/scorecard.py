@@ -76,6 +76,10 @@ PROBE_TAG = "refs/tags/v1.0.0"
 GOLDEN_WORKFLOW = re.compile(
     r"(?:[\w.-]+/golden-pipeline(?:-open)?/|\./|\$/)\.github/workflows/golden\.yml"
 )
+# A call of this repository's sast.yml, which runs CodeQL and gates its findings on the diff.
+GOLDEN_SAST = re.compile(
+    r"^(?:[\w.-]+/golden-pipeline(?:-open)?/|\./|\$/)\.github/workflows/sast\.yml(?:@|$)"
+)
 LOCKFILES = (
     "uv.lock",
     "poetry.lock",
@@ -315,9 +319,10 @@ def run_scripts(text: str) -> list[str]:
 
 def runs_sast_on_prs(text: str) -> bool:
     """One workflow file (comments removed) runs static analysis on pull requests: a CodeQL
-    analyze or Semgrep action step, or a `semgrep` command in a `run:` script."""
+    analyze or Semgrep action step, a call of golden's sast.yml, or a `semgrep` command in a
+    `run:` script."""
     return PR_TRIGGER.search(text) is not None and (
-        any(u.startswith(SAST_USES) for u in USES.findall(text))
+        any(u.startswith(SAST_USES) or GOLDEN_SAST.match(u) for u in USES.findall(text))
         or any(SEMGREP_RUN.search(script) for script in run_scripts(text))
     )
 

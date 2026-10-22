@@ -10,7 +10,12 @@ Static analysis on the diff:
   honours suppressions and baselines. A report that is missing, empty, malformed, or has a
   result with no location or an unknown level is an error. Waivable as `sast`.
 - `sast.yml` runs CodeQL without uploading anything (`contents: read`, `actions: read`) and
-  gates the findings. It is called next to `golden.yml`.
+  gates the findings. It is called next to `golden.yml`; `templates/ci-container.yml` includes it
+  in its verdict job.
+- This repository's `ci.yml` runs it for actions, Python, TypeScript and Go as part of the
+  required `ci` check. `codeql.yml` now uploads from `main` and weekly only, so CodeQL runs once
+  per pull request.
+- The scorecard's `code-scanning` control counts a pull-request workflow that calls `sast.yml`.
 
 Post-submit flaky-test scan:
 

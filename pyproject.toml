@@ -105,7 +105,18 @@ source_paths = ["src/golden/"]
 pytest_add_cli_args = ["-p", "no:randomly", "-x", "-q"]
 # tests/test_evals.py and tests/test_drill.py load evals/, scripts/ and the example
 # projects from the sandbox.
-also_copy = ["evals/", "scripts/", "examples/"]
+# Tests that check docs/alignment.md and the published numbers read these too.
+also_copy = [
+    "evals/",
+    "scripts/",
+    "examples/",
+    "docs/",
+    ".github/",
+    "actions/",
+    "templates/",
+    "README.md",
+    "uv.lock",
+]
 # "Arid" lines (Google, TSE 2021): mutating them yields no actionable test.
 do_not_mutate_patterns = [
     'help="',                          # argparse help text

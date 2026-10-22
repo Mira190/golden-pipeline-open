@@ -63,6 +63,28 @@ jobs:
       # golden-cli already scans the whole repository (examples included) once.
       security: false
 
+  # Static analysis on the diff: CodeQL per language, blocking only on the
+  # findings a change introduces. codeql.yml uploads full results from main.
+  sast:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: actions
+          - language: python
+          - language: javascript-typescript
+          - language: go
+            build-mode: autobuild
+            working-directory: examples/go
+    uses: $/.github/workflows/sast.yml
+    permissions:
+      contents: read
+      actions: read
+    with:
+      languages: ${{ matrix.language }}
+      build-mode: ${{ matrix.build-mode || '' }}
+      working-directory: ${{ matrix.working-directory || '.' }}
+
   # Publishes from main, so it must wait for every gate: an image is never
   # pushed from a commit the pipeline rejected.
   example-container:
@@ -111,7 +133,7 @@ jobs:
   ci:
     name: ci
     if: always()
-    needs: [golden-cli, example-python, example-node, example-go, example-container, drills]
+    needs: [golden-cli, example-python, example-node, example-go, example-container, drills, sast]
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     permissions: {}

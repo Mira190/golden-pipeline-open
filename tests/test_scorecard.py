@@ -630,6 +630,7 @@ def steps(*items, on=PR):
 
 
 ANALYZE = "uses: github/codeql-action/analyze@v4"
+GOLDEN_SAST_REF = "Mira190/golden-pipeline-open/.github/workflows/sast.yml"
 SEMGREP_ACTION = "uses: semgrep/semgrep-action@v1"
 SCHEDULE = "on:\n  schedule:\n    - cron: '0 0 * * 1'\n"
 SCRIPT_OF_ANOTHER_KEY = "name: x\n        with:\n          s: |\n            semgrep ci"
@@ -644,6 +645,19 @@ SCRIPT_OF_ANOTHER_KEY = "name: x\n        with:\n          s: |\n            sem
         (steps(SEMGREP_ACTION), True),
         (steps(SEMGREP_ACTION, on="on: [push, pull_request]\n"), True),
         (PR + "jobs:\n  s:\n    uses: github/codeql-action/analyze@v4\n", True),
+        # A call of golden's sast.yml runs CodeQL and gates it.
+        (PR + f"jobs:\n  s:\n    uses: {GOLDEN_SAST_REF}@{PIN}\n", True),
+        (PR + "jobs:\n  s:\n    uses: acme/golden-pipeline/.github/workflows/sast.yml@v1\n", True),
+        (PR + "jobs:\n  s:\n    uses: $/.github/workflows/sast.yml\n", True),
+        (PR + "jobs:\n  s:\n    uses: ./.github/workflows/sast.yml\n", True),
+        (PR + "jobs:\n  s:\n    uses: o/other/.github/workflows/sast.yml@v1\n", False),
+        (PR + "jobs:\n  s:\n    uses: x/o/golden-pipeline/.github/workflows/sast.yml@v1\n", False),
+        (
+            PR + "jobs:\n  s:\n    uses: o/golden-pipeline/.github/workflows/sast.yml.bak@v1\n",
+            False,
+        ),
+        (PR + "jobs:\n  s:\n    uses: $/.github/workflows/golden.yml\n", False),
+        ("on: push\njobs:\n  s:\n    uses: $/.github/workflows/sast.yml\n", False),
         # Only the analyze step reports findings: init alone, another repo or path don't.
         (steps(f"uses: github/codeql-action/init@{PIN}"), False),
         (steps("uses: github/codeql-action/upload-sarif@v4"), False),

@@ -27,8 +27,17 @@ jobs:
     with:
       language: python
 
+  # CodeQL on the diff: blocks only on the findings this change introduces.
+  sast:
+    uses: Mira190/golden-pipeline-open/.github/workflows/sast.yml@<sha> # v1.0.0
+    permissions:
+      contents: read
+      actions: read
+    with:
+      languages: python
+
   image:
-    needs: ci
+    needs: [ci, sast]
     uses: Mira190/golden-pipeline-open/.github/workflows/container.yml@<sha> # v1.0.0
     permissions:
       contents: read
@@ -41,7 +50,7 @@ jobs:
   # Require this single check in your ruleset.
   golden:
     if: always()
-    needs: [ci, image]
+    needs: [ci, sast, image]
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     permissions: {}

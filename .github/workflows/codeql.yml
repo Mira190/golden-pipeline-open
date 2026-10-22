@@ -1,11 +1,10 @@
 name: codeql
 
+# Uploads full results to code scanning from main and weekly. Pull requests and merge groups
+# run CodeQL once, in ci.yml's `sast` job, which blocks only on the findings a change introduces.
 on:
-  pull_request:
   push:
     branches: [main]
-  # Merge-queue commits need results too when a ruleset requires code scanning.
-  merge_group:
   schedule:
     - cron: "23 4 * * 1"
 
