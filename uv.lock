@@ -12,6 +12,9 @@ resolution-markers = [
 exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
 exclude-newer-span = "P7D"
 
+[manifest]
+build-constraints = [{ name = "hatchling", specifier = "==1.32.4" }]
+
 [[package]]
 name = "ast-serialize"
 version = "0.13.0"

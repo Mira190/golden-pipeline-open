@@ -30,13 +30,24 @@ runs:
     # The action directory lives inside the Golden Pipeline repository checked
     # out at the exact commit the caller pinned, so the CLI always matches the
     # workflow version without a separate release of the tool.
+    #
+    # Install from that commit's uv.lock (hash-checked, --locked fails if the lock
+    # is stale), not with `uv tool install`, which re-resolves and would pick up
+    # dependency releases newer than the lock and its 7-day cooldown. The pinned
+    # SHA then freezes the gate logic *and* everything it runs on.
     - name: Install golden CLI
       shell: bash
       env:
         GOLDEN_SRC: ${{ github.action_path }}/../..
-      # setup-uv puts uv's tool bin directory on PATH, so `golden` is available
-      # to every later step.
-      run: uv tool install --quiet --python 3.13 "$GOLDEN_SRC"
+        UV_PROJECT_ENVIRONMENT: ${{ runner.temp }}/golden-cli
+        GOLDEN_BIN: ${{ runner.temp }}/golden-bin
+      # Only the `golden` entry point goes on PATH: the environment's own python
+      # must never shadow the project's interpreter in later steps.
+      run: |
+        uv sync --project "$GOLDEN_SRC" --locked --no-dev --no-editable --python 3.13 --quiet
+        mkdir -p "$GOLDEN_BIN"
+        ln -sf "$UV_PROJECT_ENVIRONMENT/bin/golden" "$GOLDEN_BIN/golden"
+        echo "$GOLDEN_BIN" >> "$GITHUB_PATH"
 
     - if: inputs.language == 'node'
       uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0

@@ -47,6 +47,9 @@ include = ["src/golden", "README.md", "LICENSE"]
 [tool.uv]
 # Supply-chain cooldown: never resolve a release younger than 7 days.
 exclude-newer = "7 days"
+# The build backend is a dependency too: pin it, so building the CLI in a consumer's
+# job (actions/setup) is as reproducible as installing its locked dependencies.
+build-constraint-dependencies = ["hatchling==1.32.4"]
 
 [tool.ruff]
 line-length = 100
