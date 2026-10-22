@@ -313,9 +313,7 @@ def cmd_mutation(args: argparse.Namespace) -> int:
 def cmd_scorecard(args: argparse.Namespace) -> int:
     policy = _policy(args)
     policy_path = Path(os.path.relpath(args.policy.resolve(), args.root.resolve())).as_posix()
-    repo = sc.Repo(
-        args.root, policy, sc.rules_from_env(), policy_path, sc.tag_rulesets_from_env()
-    )
+    repo = sc.Repo(args.root, policy, sc.rules_from_env(), policy_path, sc.tag_rulesets_from_env())
     results = sc.evaluate(repo)
     reached = sc.level(results)
     if args.json:
