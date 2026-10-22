@@ -177,6 +177,9 @@ jobs:
           subject-name: ${{ env.IMAGE }}
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
+          # A storage record is optional registry metadata, not used to verify;
+          # creating one needs `artifact-metadata: write`, which callers don't grant.
+          create-storage-record: false
       - name: Attest SBOM
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
@@ -184,3 +187,4 @@ jobs:
           subject-digest: ${{ steps.push.outputs.digest }}
           sbom-path: sbom.spdx.json
           push-to-registry: true
+          create-storage-record: false
