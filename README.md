@@ -53,7 +53,7 @@ Coverage alone can be gamed (see the [drills](docs/evaluation.md#3-drills-does-e
 
 ## Why trust it
 
-- **Evidence-based.** The design follows published practice from Google, Meta, Amazon, Microsoft, Uber and Shopify, and the academic literature on coverage, mutation testing and flakiness ([research](docs/research.md)).
+- **Evidence-based.** The design follows published practice from Google, Meta, Amazon, Microsoft, Uber and Shopify, and the academic literature on coverage, mutation testing and flakiness ([research](docs/research.md)). An [alignment matrix](docs/alignment.md) maps each practice to the control that implements it and to executable evidence; a test fails if any cited scenario, test or job disappears.
 - **Dogfooded.** This repository is gated by its own workflows. The `golden` CLI and three example projects ([Python](examples/python), [TypeScript](examples/node), [Go](examples/go)) all run through `golden.yml` on every change. The CLI has 99% branch coverage and passes its own 80% mutation bar.
 - **Measured, not asserted.** A decision benchmark of 81 labelled pull requests ([evals](evals/README.md)) replays legitimate changes, attempts to game each gate, and malformed inputs through the real CLI on every change: 0 escapes, 0 false blocks, 0 crashes, two documented gaps. Against v1.0.0 it finds 21 escapes and 16 false blocks, all now fixed.
 - **A change never grades itself.** Gates read `golden.toml` from the pull request's base commit, so a PR can tighten the bar but not lower it, waive it or exempt itself. The scorecard requires code-owner review of workflows and policy.
@@ -92,6 +92,7 @@ See [configuration](docs/configuration.md) for every key, every workflow input a
 | | |
 |---|---|
 | [Research](docs/research.md) | How large engineering organisations ship without manual QA, with citations |
+| [Alignment](docs/alignment.md) | Each published practice, the control here that implements it, and machine-checked evidence |
 | [Architecture](docs/architecture.md) | Job graph, versioning, data flow and design decisions |
 | [Gates](docs/gates.md) | What each gate checks, how it's computed and how to fix a failure |
 | [Configuration](docs/configuration.md) | `golden.toml`, workflow inputs, language defaults |
