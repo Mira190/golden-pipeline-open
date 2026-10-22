@@ -1,0 +1,371 @@
+# The Golden Pipeline: one reusable workflow for Python, TypeScript/Node and Go.
+#
+#   jobs:
+#     ci:
+#       uses: Mira190/golden-pipeline-open/.github/workflows/golden.yml@<sha> # v1.x.y
+#       with:
+#         language: python
+#
+# Require the single check `ci / golden` in your ruleset. Every other job feeds
+# into it, so adding or removing gates never touches branch protection.
+name: golden
+
+on:
+  workflow_call:
+    inputs:
+      language:
+        description: python, node or go
+        type: string
+        required: true
+      working-directory:
+        description: Project directory inside the repository (monorepos).
+        type: string
+        default: "."
+      versions:
+        description: JSON list of language versions to test; the last one runs the gates.
+        type: string
+        default: ""
+      install-command:
+        type: string
+        default: ""
+      format-command:
+        type: string
+        default: ""
+      lint-command:
+        type: string
+        default: ""
+      typecheck-command:
+        type: string
+        default: ""
+      test-command:
+        description: Must write a Cobertura or LCOV report to `coverage-report`.
+        type: string
+        default: ""
+      coverage-report:
+        type: string
+        default: ""
+      flaky-command:
+        description: Re-runs changed tests; gets $GOLDEN_TESTS, $GOLDEN_TEST_PACKAGES, $GOLDEN_REPEATS.
+        type: string
+        default: ""
+      mutation-command:
+        description: Mutates changed code; gets $GOLDEN_MUTATE and $GOLDEN_BASE.
+        type: string
+        default: ""
+      mutation-report:
+        type: string
+        default: ""
+      mutation-format:
+        description: mutmut, stryker or gremlins
+        type: string
+        default: ""
+      mutation:
+        description: Run diff-scoped mutation testing on pull requests.
+        type: boolean
+        default: true
+      security:
+        description: Run secret, dependency and workflow scanning.
+        type: boolean
+        default: true
+      skip-presence-label:
+        description: PR label that turns the test-presence gate into report-only.
+        type: string
+        default: no-tests-needed
+      runs-on:
+        type: string
+        default: ubuntu-24.04
+      egress-policy:
+        description: harden-runner egress policy (audit or block).
+        type: string
+        default: audit
+
+permissions: {}
+
+jobs:
+  plan:
+    name: plan
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      slug: ${{ steps.plan.outputs.slug }}
+      base: ${{ steps.plan.outputs.base }}
+      versions: ${{ steps.plan.outputs.versions }}
+      primary-version: ${{ steps.plan.outputs.primary-version }}
+      install-command: ${{ steps.plan.outputs.install-command }}
+      format-command: ${{ steps.plan.outputs.format-command }}
+      lint-command: ${{ steps.plan.outputs.lint-command }}
+      typecheck-command: ${{ steps.plan.outputs.typecheck-command }}
+      test-command: ${{ steps.plan.outputs.test-command }}
+      coverage-report: ${{ steps.plan.outputs.coverage-report }}
+      coverage-dir: ${{ steps.plan.outputs.coverage-dir }}
+      flaky-command: ${{ steps.plan.outputs.flaky-command }}
+      mutation-command: ${{ steps.plan.outputs.mutation-command }}
+      mutation-report: ${{ steps.plan.outputs.mutation-report }}
+      mutation-format: ${{ steps.plan.outputs.mutation-format }}
+      tests: ${{ steps.plan.outputs.tests }}
+      test-packages: ${{ steps.plan.outputs.test-packages }}
+      mutate: ${{ steps.plan.outputs.mutate }}
+      repeats: ${{ steps.plan.outputs.repeats }}
+      presence-report-only: ${{ steps.plan.outputs.presence-report-only }}
+    steps:
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: ${{ inputs.egress-policy }}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: $/actions/setup
+      - name: Validate policy and plan the run
+        id: plan
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          GOLDEN_INPUTS: ${{ toJSON(inputs) }}
+          LANGUAGE: ${{ inputs.language }}
+        run: |
+          golden policy check
+          golden plan --language "$LANGUAGE"
+
+  lint:
+    name: lint
+    needs: plan
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: ${{ inputs.egress-policy }}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: $/actions/setup
+        with:
+          language: ${{ inputs.language }}
+          version: ${{ needs.plan.outputs.primary-version }}
+          working-directory: ${{ inputs.working-directory }}
+          install-command: ${{ needs.plan.outputs.install-command }}
+      - name: Format
+        if: needs.plan.outputs.format-command != ''
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          CMD: ${{ needs.plan.outputs.format-command }}
+        run: bash -euo pipefail -c "$CMD"
+      - name: Lint
+        if: ${{ !cancelled() && needs.plan.outputs.lint-command != '' }}
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          CMD: ${{ needs.plan.outputs.lint-command }}
+        run: bash -euo pipefail -c "$CMD"
+      - name: golangci-lint
+        if: ${{ !cancelled() && inputs.language == 'go' && inputs.lint-command == '' }}
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.14.0
+          working-directory: ${{ inputs.working-directory }}
+      - name: Typecheck
+        if: ${{ !cancelled() && needs.plan.outputs.typecheck-command != '' }}
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          CMD: ${{ needs.plan.outputs.typecheck-command }}
+        run: bash -euo pipefail -c "$CMD"
+
+  test:
+    name: test (${{ matrix.version }})
+    needs: plan
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ${{ fromJSON(needs.plan.outputs.versions) }}
+    steps:
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: ${{ inputs.egress-policy }}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: $/actions/setup
+        with:
+          language: ${{ inputs.language }}
+          version: ${{ matrix.version }}
+          working-directory: ${{ inputs.working-directory }}
+          install-command: ${{ needs.plan.outputs.install-command }}
+      - name: Test (random order, with coverage)
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          CMD: ${{ needs.plan.outputs.test-command }}
+          CI: "true"
+        run: bash -euo pipefail -c "$CMD"
+      - name: Upload coverage
+        if: matrix.version == needs.plan.outputs.primary-version
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: golden-coverage-${{ needs.plan.outputs.slug }}
+          path: ${{ inputs.working-directory }}/${{ needs.plan.outputs.coverage-report }}
+          if-no-files-found: error
+          retention-days: 7
+
+  gates:
+    name: gates
+    needs: [plan, test]
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      BASE: ${{ needs.plan.outputs.base }}
+      LANGUAGE: ${{ inputs.language }}
+      REPORT: ${{ needs.plan.outputs.coverage-report }}
+    steps:
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: ${{ inputs.egress-policy }}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: $/actions/setup
+        with:
+          language: ${{ inputs.language }}
+          version: ${{ needs.plan.outputs.primary-version }}
+          working-directory: ${{ inputs.working-directory }}
+          install-command: ${{ needs.plan.outputs.tests != '' && needs.plan.outputs.install-command || '' }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: golden-coverage-${{ needs.plan.outputs.slug }}
+          path: ${{ inputs.working-directory }}/${{ needs.plan.outputs.coverage-dir }}
+
+      - name: Diff coverage (changed lines must be tested)
+        if: env.BASE != ''
+        working-directory: ${{ inputs.working-directory }}
+        run: golden diff-coverage --base "$BASE" "$REPORT"
+
+      # Pull requests only: the opt-out label lives on the PR, not the merge-queue commit.
+      - name: Test presence (changed code ships with tests)
+        if: ${{ !cancelled() && env.BASE != '' && github.event_name == 'pull_request' }}
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          REPORT_ONLY: ${{ needs.plan.outputs.presence-report-only == 'true' && '--report-only' || '' }}
+        run: golden presence --base "$BASE" --preset "$LANGUAGE" $REPORT_ONLY
+
+      # Baseline coverage of the default branch travels through the Actions
+      # cache: PRs can read caches written on their base branch, and nothing
+      # has to be committed back to the repository.
+      - name: Restore default-branch coverage baseline
+        if: ${{ !cancelled() && env.BASE != '' }}
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/golden-baseline.json
+          key: golden-baseline-${{ needs.plan.outputs.slug }}-${{ github.sha }}
+          restore-keys: golden-baseline-${{ needs.plan.outputs.slug }}-
+      - name: Coverage ratchet (total coverage never drops)
+        if: ${{ !cancelled() }}
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          BASELINE: ${{ runner.temp }}/golden-baseline.json
+          ON_DEFAULT_BRANCH: ${{ github.event_name == 'push' && github.ref_name == github.event.repository.default_branch }}
+        run: |
+          if [ "$ON_DEFAULT_BRANCH" = "true" ]; then
+            golden ratchet "$REPORT" --write-baseline "$BASELINE" --sha "$GITHUB_SHA"
+          else
+            golden ratchet "$REPORT" --baseline "$BASELINE"
+          fi
+      - name: Save coverage baseline
+        if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/golden-baseline.json
+          key: golden-baseline-${{ needs.plan.outputs.slug }}-${{ github.sha }}
+
+      - name: Flake gate (changed tests must pass ${{ needs.plan.outputs.repeats }}x)
+        if: ${{ !cancelled() && needs.plan.outputs.tests != '' }}
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          CMD: ${{ needs.plan.outputs.flaky-command }}
+          GOLDEN_TESTS: ${{ needs.plan.outputs.tests }}
+          GOLDEN_TEST_PACKAGES: ${{ needs.plan.outputs.test-packages }}
+          GOLDEN_REPEATS: ${{ needs.plan.outputs.repeats }}
+        run: bash -o noglob -euo pipefail -c "$CMD"
+
+      - name: Repository scorecard
+        if: ${{ !cancelled() }}
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GOLDEN_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: golden scorecard --root "$GITHUB_WORKSPACE"
+
+  mutation:
+    name: mutation
+    needs: [plan, test]
+    if: >-
+      inputs.mutation && github.event_name == 'pull_request' &&
+      needs.plan.outputs.mutate != ''
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: ${{ inputs.egress-policy }}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: $/actions/setup
+        with:
+          language: ${{ inputs.language }}
+          version: ${{ needs.plan.outputs.primary-version }}
+          working-directory: ${{ inputs.working-directory }}
+          install-command: ${{ needs.plan.outputs.install-command }}
+      - name: Mutate the changed lines
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          CMD: ${{ needs.plan.outputs.mutation-command }}
+          GOLDEN_MUTATE: ${{ needs.plan.outputs.mutate }}
+          GOLDEN_BASE: ${{ needs.plan.outputs.base }}
+        run: bash -o noglob -euo pipefail -c "$CMD"
+      - name: Mutation score gate
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          REPORT: ${{ needs.plan.outputs.mutation-report }}
+          FORMAT: ${{ needs.plan.outputs.mutation-format }}
+          BASE: ${{ needs.plan.outputs.base }}
+        run: golden mutation "$REPORT" --format "$FORMAT" --base "$BASE"
+
+  security:
+    name: security
+    if: inputs.security
+    permissions:
+      contents: read
+    uses: $/.github/workflows/security.yml
+    with:
+      working-directory: ${{ inputs.working-directory }}
+      runs-on: ${{ inputs.runs-on }}
+      egress-policy: ${{ inputs.egress-policy }}
+
+  golden:
+    name: golden
+    if: always()
+    needs: [plan, lint, test, gates, mutation, security]
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - name: Verdict
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          if ! echo "$NEEDS" | jq -e 'all(.[]; .result == "success" or .result == "skipped")' > /dev/null; then
+            echo "::error::Golden Pipeline failed: see the jobs above"
+            exit 1
+          fi

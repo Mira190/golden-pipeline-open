@@ -1,0 +1,24 @@
+{
+  "name": "pricing-node",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Example service guarded by the Golden Pipeline (TypeScript)",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "lint": "biome ci .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "mutate": "stryker run"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "@stryker-mutator/core": "10.0.0",
+    "@stryker-mutator/vitest-runner": "10.0.0",
+    "@vitest/coverage-v8": "4.1.11",
+    "typescript": "6.0.3",
+    "vitest": "4.1.11"
+  }
+}

@@ -1,0 +1,21 @@
+# Optional. Every value may be stricter than the default, never weaker than the floor.
+[coverage]
+diff_min = 90            # floor 80: % of changed lines that must be covered
+ratchet_tolerance = 0.5  # floor 2:  allowed drop in total coverage (pp)
+
+[mutation]
+min_score = 80           # floor 60: mutation score on changed code
+
+[flaky]
+repeats = 10             # floor 3: re-runs of each changed test
+
+[scorecard]
+min_level = 2            # floor 1: repository maturity level (L1-L4)
+
+[presence]
+exempt = []              # globs excluded from test presence and mutation
+
+# Time-boxed exception (max 90 days); the gate is report-only until it expires.
+# [waivers.mutation]
+# reason = "legacy module, tracked in PLAT-123"
+# expires = 2026-12-31

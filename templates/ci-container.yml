@@ -1,0 +1,40 @@
+# Pipeline plus a signed container image published from the default branch.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  merge_group:
+
+permissions: {}
+
+jobs:
+  ci:
+    uses: Mira190/golden-pipeline-open/.github/workflows/golden.yml@<sha> # v1.0.0
+    permissions:
+      contents: read
+    with:
+      language: python
+
+  image:
+    needs: ci
+    uses: Mira190/golden-pipeline-open/.github/workflows/container.yml@<sha> # v1.0.0
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    with:
+      smoke-command: docker run --rm "$IMAGE" --help
+
+  # Require this single check in your ruleset.
+  golden:
+    if: always()
+    needs: [ci, image]
+    runs-on: ubuntu-24.04
+    permissions: {}
+    steps:
+      - env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: echo "$NEEDS" | jq -e 'all(.[]; .result == "success" or .result == "skipped")'

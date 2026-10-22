@@ -1,0 +1,27 @@
+# Weekly, grouped updates with a release-age cooldown: most malicious package
+# versions are detected and pulled within days of publication.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directories: ["/", "/actions/setup"]
+    schedule: { interval: weekly }
+    cooldown: { default-days: 7 }
+    groups: { actions: { patterns: ["*"] } }
+  - package-ecosystem: uv
+    directories: ["/", "/examples/python"]
+    schedule: { interval: weekly }
+    cooldown: { default-days: 7, semver-major-days: 14 }
+    groups: { python: { patterns: ["*"] } }
+  - package-ecosystem: npm
+    directory: /examples/node
+    schedule: { interval: weekly }
+    cooldown: { default-days: 7, semver-major-days: 14 }
+    groups: { node: { patterns: ["*"] } }
+  - package-ecosystem: gomod
+    directory: /examples/go
+    schedule: { interval: weekly }
+    cooldown: { default-days: 7, semver-major-days: 14 }
+  - package-ecosystem: docker
+    directory: /examples/python
+    schedule: { interval: weekly }
+    cooldown: { default-days: 7 }

@@ -1,0 +1,15 @@
+# Policy for this repository's own code (the golden CLI). Values may only be
+# stricter than the platform floor; see docs/configuration.md.
+
+[coverage]
+diff_min = 95
+ratchet_tolerance = 0.2
+
+[mutation]
+min_score = 80
+
+[flaky]
+repeats = 10
+
+[scorecard]
+min_level = 2

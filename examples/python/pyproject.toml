@@ -1,0 +1,42 @@
+[project]
+name = "pricing"
+version = "0.1.0"
+description = "Example service guarded by the Golden Pipeline (Python)"
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = ["hypothesis>=6.140", "pytest>=9.0"]
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+exclude-newer = "7 days"
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]
+
+[tool.mypy]
+strict = true
+exclude = ["^tests/"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["--strict-markers"]
+
+[tool.coverage.run]
+branch = true
+source = ["pricing"]
+omit = ["*/__main__.py"]
+relative_files = true
+
+[tool.mutmut]
+source_paths = ["src/pricing/"]

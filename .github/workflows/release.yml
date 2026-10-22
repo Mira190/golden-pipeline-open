@@ -1,0 +1,35 @@
+# Tag vX.Y.Z on main -> GitHub release. Enable "immutable releases" in the
+# repository settings so a published tag can never be moved or reused.
+name: release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions: {}
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Tag must match the package version
+        run: |
+          version="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' src/golden/__init__.py)"
+          test "v$version" = "$GITHUB_REF_NAME" || {
+            echo "::error::tag $GITHUB_REF_NAME does not match src/golden/__init__.py ($version)"
+            exit 1
+          }
+          grep -q "^version = \"$version\"" pyproject.toml
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes --title "$GITHUB_REF_NAME"

@@ -1,0 +1,104 @@
+# Language-agnostic supply-chain and secret scanning. Called by golden.yml and
+# usable on its own for any repository:
+#
+#   jobs:
+#     security:
+#       uses: Mira190/golden-pipeline-open/.github/workflows/security.yml@<sha> # v1.x.y
+name: golden-security
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: Directory whose lockfiles are scanned for vulnerable dependencies.
+        type: string
+        default: "."
+      fail-on-severity:
+        description: dependency-review threshold (low, moderate, high, critical).
+        type: string
+        default: high
+      allow-licenses:
+        description: Comma-separated SPDX allowlist for new dependencies (empty = no licence gate).
+        type: string
+        default: ""
+      runs-on:
+        type: string
+        default: ubuntu-24.04
+      egress-policy:
+        type: string
+        default: audit
+
+permissions: {}
+
+jobs:
+  secrets:
+    name: secrets
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: ${{ inputs.egress-policy }}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # gitleaks CLI from an image pinned by digest (gitleaks-action needs a
+      # licence key for organisations and sends repository metadata out).
+      - name: Scan for committed secrets
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          IMAGE: ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+        run: |
+          range=()
+          if [ -n "$BASE" ]; then range=(--log-opts="$BASE..HEAD"); fi
+          docker run --rm -v "$PWD:/repo:ro" "$IMAGE" git /repo --redact --no-banner "${range[@]}"
+
+  dependencies:
+    name: dependencies
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: ${{ inputs.egress-policy }}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Known vulnerabilities in lockfiles (OSV)
+        uses: google/osv-scanner-action/osv-scanner-action@b1d267aea5211fa648d9d442fa64b90dbdcbdd36 # v2.7.0
+        with:
+          scan-args: |-
+            --recursive
+            ${{ inputs.working-directory }}
+      - name: New dependencies in this pull request
+        if: github.event_name == 'pull_request'
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: ${{ inputs.fail-on-severity }}
+          allow-licenses: ${{ inputs.allow-licenses }}
+          comment-summary-in-pr: never
+
+  workflows:
+    name: workflows
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: ${{ inputs.egress-policy }}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Audit GitHub Actions workflows (zizmor)
+        uses: zizmorcore/zizmor-action@85b2b9fb8e3325e7a23d7d0a9d7ba5ae0f999e3e # v0.7.1
+        with:
+          version: 1.30.0
+          advanced-security: false
+          persona: regular

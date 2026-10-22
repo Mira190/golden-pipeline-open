@@ -1,0 +1,134 @@
+# Dogfooding: this repository is gated by its own reusable workflows. The
+# golden CLI and three example projects (Python, TypeScript, Go) all run
+# through golden.yml exactly as a consumer repository would.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  merge_group:
+
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  golden-cli:
+    uses: $/.github/workflows/golden.yml
+    permissions:
+      contents: read
+    with:
+      language: python
+      typecheck-command: uv run mypy
+      test-command: >-
+        uv run pytest -n auto -p randomly --cov --cov-report=xml:coverage.xml --cov-report=term
+      flaky-command: uv run pytest -n auto -p randomly --count="$GOLDEN_REPEATS" $GOLDEN_TESTS
+
+  example-python:
+    uses: $/.github/workflows/golden.yml
+    permissions:
+      contents: read
+    with:
+      language: python
+      working-directory: examples/python
+
+  example-node:
+    uses: $/.github/workflows/golden.yml
+    permissions:
+      contents: read
+    with:
+      language: node
+      working-directory: examples/node
+
+  example-go:
+    uses: $/.github/workflows/golden.yml
+    permissions:
+      contents: read
+    with:
+      language: go
+      working-directory: examples/go
+
+  example-container:
+    uses: $/.github/workflows/container.yml
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    with:
+      context: examples/python
+      image: golden-pipeline-example
+      smoke-command: test "$(docker run --rm "$IMAGE" 1000x2)" = "subtotal=2000 discount=0 shipping=800 total=2800"
+
+  workflow-lint:
+    name: workflow lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26"
+          cache: false
+      # actionlint 1.7.12 predates the `$/` self-repository syntax (2026-07);
+      # zizmor (in golden-security) understands it and audits these files too.
+      - name: actionlint
+        run: >-
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          -ignore 'specifying action "\$/'
+          -ignore 'reusable workflow call "\$/'
+
+  # Evaluate the evaluator: replay "no tests / weak test / real tests" for each
+  # language through the real gates and assert every verdict.
+  drills:
+    name: gate drills
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: $/actions/setup
+        with:
+          language: python
+          version: "3.13"
+          install-command: uv sync --locked
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: examples/go/go.mod
+          cache: false
+      - run: uv run python scripts/drill.py
+
+  # Single required check for this repository's ruleset.
+  ci:
+    name: ci
+    if: always()
+    needs: [golden-cli, example-python, example-node, example-go, example-container, workflow-lint, drills]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - name: Verdict
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$NEEDS" | jq -e 'all(.[]; .result == "success" or .result == "skipped")' > /dev/null
