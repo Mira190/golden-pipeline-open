@@ -25,7 +25,8 @@ date. One bump upgrades the YAML and the gate logic together.
 - **Require status checks to pass:** add `ci / golden` (the caller job's name, then `golden`).
   Restrict the source to *GitHub Actions*. Don't list the individual jobs.
 - **Require a pull request before merging:** 1 approval, require review from Code Owners,
-  dismiss stale approvals on push.
+  dismiss stale approvals on push, and require approval of the most recent push (the last
+  pusher can't approve their own code: two-person review).
 - **Block force pushes** and **Restrict deletions.**
 - **Require merge queue**, if available for your plan. The workflow already listens to
   `merge_group`.
@@ -40,6 +41,15 @@ date. One bump upgrades the YAML and the gate logic together.
 
 **Organisation policy:**
 
+- **Require the pipeline centrally.** On a `pull_request` event GitHub runs the pull request's own
+  copy of the caller workflow, so a PR can edit the very `ci.yml` that judges it (`golden plan`
+  flags this on the file, but a warning is not a control). Put the caller workflow in a
+  governance repository, then add an *organisation* ruleset with **"Require workflows to pass
+  before merging"** that targets every adopting repository and points at that file. GitHub then
+  runs the governance repository's version, which no pull request can edit. The workflow must
+  listen to `pull_request` and `merge_group`. Where organisation rulesets aren't available,
+  require Code Owner review of `.github/workflows/` instead (the scorecard's L3 `owner-review`
+  control checks this).
 - Actions → General → "Require actions to be pinned to a full-length commit SHA".
 - Allow only GitHub-owned and verified actions, plus `Mira190/golden-pipeline-open`.
 

@@ -83,8 +83,18 @@ they're written (Luo et al., FSE 2014), so this is the cheapest point to catch t
 **Question:** would these tests notice a bug?
 
 The mutation tool injects small faults (`>` → `>=`, `+` → `-`, `return x` → `return None`)
-**into the changed code only** and runs the tests against each one. The gate passes when the
-score reaches `mutation.min_score` (default 80%, floor 60%):
+**into the code the change puts at stake** and runs the tests against each one:
+
+- the changed source lines, and
+- every source function that a changed or removed *test* line names, in a source file that test
+  references. A pull request that only weakens a test (drops an assertion, deletes a test case
+  or a whole test file) changes no source line, but it changes what the tests prove about those
+  functions, so they are mutated too. Diff coverage and test presence have nothing to check in
+  such a PR, and the coverage ratchet doesn't move, so mutation testing is the gate that sees it.
+
+Function boundaries come from the Python AST, from gofmt's layout for Go, and from a
+formatter-shaped scan of TypeScript/JavaScript (declarations, function-valued `const`s and class
+methods). The gate passes when the score reaches `mutation.min_score` (default 80%, floor 60%):
 
 ```
 score = (killed + timed out) / (killed + timed out + survived + not covered)
