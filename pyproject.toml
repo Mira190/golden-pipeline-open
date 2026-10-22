@@ -84,7 +84,8 @@ filterwarnings = ["error"]
 
 [tool.coverage.run]
 branch = true
-source = ["golden"]
+# The drill harness and the decision benchmark are held to the same bar as the CLI.
+source = ["golden", "evals", "scripts"]
 omit = ["*/golden/__main__.py"]
 relative_files = true
 

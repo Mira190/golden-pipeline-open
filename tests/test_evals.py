@@ -105,3 +105,79 @@ def test_main_writes_report_and_json(tmp_path, capsys, monkeypatch):
     assert data["score"]["total"]["correct"] == 2
     assert "| **total** | 2 | 2 | 0 | 0 | 0 | 0 | 0 |" in capsys.readouterr().out
     assert "### Gate eval" in summary.read_text()
+
+
+def scenario(**fields):
+    return runner.Scenario(id="x", gate="g", category="legit", why="w", **{"argv": [], **fields})
+
+
+def test_parse_outputs_tolerates_an_unterminated_block():
+    assert runner.parse_outputs("b<<EOF\nx\ny") == {"b": "x\ny"}
+
+
+def test_check_reports_every_mismatch():
+    s = scenario(
+        expect="pass",
+        expect_lines=["a {base}"],
+        expect_json={"k": 1},
+        expect_outputs={"o": "{base}"},
+        stdout_contains=["needle {base}"],
+    )
+    ok, detail = runner.check(s, "block", "b\n", {"o": "other"}, {"base": "abc"})
+    assert not ok
+    assert detail == (
+        "expected pass, got block; expected lines ['a abc'], got ['b']; "
+        "json mismatch {'k': '<missing>'}; outputs mismatch {'o': 'other'}; "
+        "stdout lacks 'needle {base}'"
+    )
+
+
+def test_check_passes_matching_results():
+    s = scenario(
+        expect="pass",
+        expect_lines=["a abc"],
+        expect_json={"k": 1},
+        expect_outputs={"o": "abc"},
+        stdout_contains=["k"],
+    )
+    stdout = '{"k": 1}'
+    assert runner.check(s, "pass", stdout, {"o": "abc"}, {"base": "abc"}) == (
+        False,
+        ("expected lines ['a abc'], got ['{\"k\": 1}']"),
+    )
+    s.expect_lines = None
+    assert runner.check(s, "pass", stdout, {"o": "abc"}, {"base": "abc"}) == (True, "as expected")
+
+
+@pytest.mark.parametrize(
+    ("stdout", "detail"),
+    [
+        ('{"k": 2}', "json mismatch {'k': 2}"),
+        ("[1]", "json mismatch {'k': '<missing>'}"),
+        ("not json", "json mismatch {'k': '<missing>'}"),
+        ('{"k": null}', "json mismatch {'k': None}"),
+    ],
+)
+def test_check_json_values(stdout, detail):
+    ok, got = runner.check(scenario(expect_json={"k": 1}), "pass", stdout, {}, {})
+    assert not ok
+    assert got == detail
+
+
+def test_a_crash_is_never_acceptable():
+    assert runner.check(scenario(), "crash", "", {}, {}) == (False, "crashed")
+    assert runner.check(scenario(), "block", "", {}, {}) == (True, "as expected")
+
+
+def test_main_needs_git(monkeypatch, capsys):
+    monkeypatch.setattr(runner.shutil, "which", lambda name: None)
+    assert runner.main([]) == 2
+    assert "git is required" in capsys.readouterr().err
+
+
+def test_main_fails_on_a_wrong_decision(monkeypatch, capsys):
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    wrong = scenario(argv=["policy", "check"], expect="block")
+    monkeypatch.setattr(runner, "load", lambda: [wrong])
+    assert runner.main([]) == 1
+    assert "::error::x: expected block, got pass" in capsys.readouterr().out

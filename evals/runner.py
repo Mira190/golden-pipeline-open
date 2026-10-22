@@ -254,14 +254,11 @@ def check(
             problems.append(f"expected lines {want}, got {got}")
     if s.expect_json is not None:
         try:
-            data = json.loads(stdout)
+            parsed = json.loads(stdout)
         except ValueError:
-            data = None
-        wrong = {
-            k: (data or {}).get(k, "<missing>")
-            for k, v in s.expect_json.items()
-            if not isinstance(data, dict) or data.get(k, "<missing>") != v
-        }
+            parsed = None
+        data = parsed if isinstance(parsed, dict) else {}
+        wrong = {k: data.get(k, "<missing>") for k, v in s.expect_json.items() if data.get(k) != v}
         if wrong:
             problems.append(f"json mismatch {wrong}")
     if s.expect_outputs is not None:

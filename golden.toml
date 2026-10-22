@@ -13,8 +13,3 @@ repeats = 10
 
 [scorecard]
 min_level = 2
-
-[presence]
-# The drill harness has no unit tests of its own: it *is* an end-to-end test of
-# the gates, run against real toolchains by ci.yml's `gate drills` job.
-exempt = ["scripts/**"]
