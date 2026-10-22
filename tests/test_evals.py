@@ -43,7 +43,7 @@ def test_corpus_is_labelled():
     assert {s.category for s in SCENARIOS} == {"legit", "gaming", "robustness"}
 
 
-@pytest.mark.parametrize("doc", ["README.md", "docs/value.md"])
+@pytest.mark.parametrize("doc", ["README.md", "docs/value.md", "docs/evaluation.md"])
 def test_docs_quote_the_corpus_size(doc):
     quoted = re.findall(r"(\d+) labelled pull requests", (ROOT / doc).read_text(encoding="utf-8"))
     assert quoted

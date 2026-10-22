@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+Property-based tests, and one self-grading path closed:
+
+- `tests/test_properties.py` checks invariants for generated inputs rather than examples:
+  - The merged policy is never looser than the base, and every deferral is announced.
+  - Job outputs round-trip, and no value can add or override a key.
+  - Annotations stay one workflow command and carry the exact text.
+  - `changed_lines` agrees with git.
+  - `HYPOTHESIS_PROFILE=ci` runs 2,000 examples per property.
+- Fixed: when the base's `golden.toml` failed today's rules, the change was judged by its own
+  policy, including waivers and exemptions it added for itself. In that fallback it now keeps
+  only its validated values; its waivers and exemptions apply after merge.
+
 Real-fault benchmark:
 
 - `evals/realfaults/` replays real bug fixes from open-source Python libraries through the

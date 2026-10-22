@@ -19,12 +19,12 @@ layers. Each layer catches a class of defect the others miss:
 | Layer | Question | Tooling | Runs |
 |---|---|---|---|
 | Static | Is the code well-formed, typed, and are the workflows safe? | ruff, mypy `--strict`, actionlint + shellcheck, zizmor, CodeQL, OpenSSF Scorecard | every PR |
-| Unit and property tests | Does each function do what it says? | pytest (random order, xdist), hypothesis, branch coverage ≥ 99% | every PR |
+| Unit and property tests | Does each function do what it says, for every input and not just the examples? | pytest (random order, xdist), branch coverage ≥ 99%; Hypothesis properties in `tests/test_properties.py` for the invariants safety rests on (merged policy never looser than the base, no output or annotation injection, changed lines match git), 2,000 examples each with `HYPOTHESIS_PROFILE=ci` | every PR |
 | Test adequacy | Would those tests notice a bug in the gate code? | mutmut on changed functions, ≥ 80% | every PR |
-| **Decision benchmark** | Does each gate make the right merge decision on legitimate, gaming and malformed pull requests? | [`evals/`](../evals/README.md): 81 labelled scenarios run through the real CLI, scored as escapes, false blocks, robustness failures and crashes | every PR (`tests/test_evals.py`) |
+| **Decision benchmark** | Does each gate make the right merge decision on legitimate, gaming and malformed pull requests? | [`evals/`](../evals/README.md): 96 labelled pull requests run through the real CLI, scored as escapes, false blocks, robustness failures and crashes | every PR (`tests/test_evals.py`) |
 | End-to-end drills | Do the gates catch a weak test with the real toolchains, and did a tool upgrade change its contract? | `scripts/drill.py` (pytest/mutmut, Vitest/Stryker, go test/gremlins) | every PR |
 | Shadow runs (recommended) | How often would the gates block real, reviewed changes? | `golden local` or the workflow in report-only mode over a few hundred merged PRs of an adopting repository; the false-block rate in §2.1 | before raising `min_level` or tightening floors |
-| Real-fault replay (recommended) | Do the gates catch real bugs, not just synthetic mutants? | BugsInPy / Defects4J-style pairs: revert a historical fix but keep its test file out of the change, and expect the mutation and presence gates to block | quarterly |
+| Real-fault replay | Do the gates catch real bugs, not just synthetic mutants? | [`evals/realfaults/`](../evals/realfaults/README.md): real bug fixes from open-source Python libraries, run at the fix's parent with the tests of that day. Grow it with BugsInPy or Defects4J-style pairs and report confidence intervals | on demand; quarterly as it grows |
 | Outcomes | Is delivery faster *and* more stable? | `golden dora`, Actions API | monthly |
 
 The decision benchmark and the drills complement each other. The benchmark is fast (about 20 s),
@@ -34,8 +34,8 @@ an external tool's contract. Examples are mutmut renaming its mutants, or a Vite
 that Stryker can no longer drive. When the two disagree, trust the drill for "does it work with
 real tools" and the benchmark for "is the decision right".
 
-Run against v1.0.0, the benchmark finds 21 escapes, 16 false blocks and 13 robustness failures
-(7 of them tracebacks) in 81 scenarios. Every one now has a fix and a unit test, and the
+Run against v1.0.0, the benchmark finds 31 escapes, 20 false blocks and 13 robustness failures
+(7 of them tracebacks). Every one now has a fix and a unit test, and the
 benchmark is part of the test suite. See [evals/README.md](../evals/README.md#results).
 
 ## 1. Capability: the maturity scorecard

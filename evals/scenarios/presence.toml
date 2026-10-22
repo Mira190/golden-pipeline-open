@@ -281,3 +281,17 @@ expect = "block"
 [scenario.head]
 "pricing/pricing.go" = "package pricing\n\nconst A = 1\n"
 "cart/cart_test.go" = "package cart\n"
+
+[[scenario]]
+id = "presence/python-waiver-added-while-base-policy-is-invalid"
+gate = "presence"
+category = "gaming"
+why = "The merged golden.toml fails today's rules (a floor the platform raised), so the PR is judged by its own values. Its own new waiver must still wait for review: a change never grades itself."
+argv = ["presence", "--base", "{base}", "--preset", "python"]
+expect = "block"
+[scenario.base]
+"billing/tax.py" = "def rate():\n    return 0.1\n"
+"golden.toml" = "[coverage]\ndiff_min = 50\n"
+[scenario.head]
+"billing/tax.py" = "def rate():\n    return 0.2\n"
+"golden.toml" = "[coverage]\ndiff_min = 90\n\n[waivers.test-presence]\nreason = \"later\"\nexpires = {in30days}\n"

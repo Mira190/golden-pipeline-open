@@ -11,19 +11,19 @@ re-run, and the limits of each measurement are stated with it.
 
 | Claim | Measurement | Result | Re-run |
 |---|---|---|---|
-| It makes the right merge decision | [Decision benchmark](#1-the-right-merge-decision): 95 labelled pull requests through the real CLI | 0 escapes, 0 false blocks, 0 crashes; v1.0.0 had 30, 20 and 7 | `uv run python evals/runner.py` |
+| It makes the right merge decision | [Decision benchmark](#1-the-right-merge-decision): 96 labelled pull requests through the real CLI | 0 escapes, 0 false blocks, 0 crashes; v1.0.0 had 31, 20 and 7 | `uv run python evals/runner.py` |
 | It catches weak tests that coverage misses | [Drills](#2-weak-tests-with-real-toolchains): 4 changes × 3 languages, with pytest, Vitest, Go and the mutation tools | Coverage passes the weak test in all three languages; mutation blocks it. 10/10 drills reach the expected decision | `uv run python scripts/drill.py <language>` |
 | It catches real bugs | [Real-fault benchmark](#3-real-bugs-from-real-projects): 10 real bugs from open-source libraries | The full pipeline flags 4, coverage alone 3; a surviving mutant sits on the faulty line in 6 | `uv run python evals/realfaults/run.py` |
 | It doesn't block legitimate work | 38 legitimate pull requests in the benchmark | 0 false blocks; v1.0.0 got 20 wrong | as above |
-| It holds against people who want to get round it | 41 gaming attempts in the benchmark | 0 escapes; v1.0.0 let 30 through | as above |
+| It holds against people who want to get round it | 42 gaming attempts in the benchmark | 0 escapes; v1.0.0 let 31 through | as above |
 | It fails closed | 16 corrupt or malformed inputs | 0 crashes, 0 silent passes | as above |
 
 ## 1. The right merge decision
 
-The [decision benchmark](../evals/README.md) holds 95 labelled pull requests:
+The [decision benchmark](../evals/README.md) holds 96 labelled pull requests:
 
 - **38 legitimate changes** the gates must let through or handle correctly.
-- **41 attempts to get round a gate.** For example: no tests, assertion-free tests, a pull request
+- **42 attempts to get round a gate.** For example: no tests, assertion-free tests, a pull request
   that lowers its own threshold or waives itself, a scorecard control met by a comment.
 - **16 broken inputs** the gates must refuse with a message, not crash on or wave through.
 
@@ -32,18 +32,18 @@ same scenarios run against the initial release and against the current code:
 
 | | Correct | Escapes | False blocks | Robustness failures | Crashes | Known gaps |
 |---|---|---|---|---|---|---|
-| v1.0.0 (initial release) | 31 / 95 | **30** | **20** | 13 | 7 | 1 |
-| Current | 94 / 95 | 0 | 0 | 0 | 0 | 1 |
+| v1.0.0 (initial release) | 31 / 96 | **31** | **20** | 13 | 7 | 1 |
+| Current | 95 / 96 | 0 | 0 | 0 | 0 | 1 |
 
-v1.0.0's 63 wrong decisions fall into two groups, and the split matters for what the number
+v1.0.0's 64 wrong decisions fall into two groups, and the split matters for what the number
 proves:
 
 | | Escapes | False blocks | Robustness (incl. crashes) | Total |
 |---|---|---|---|---|
-| **Defects in controls v1.0.0 already had** | 19 | 13 | 13 | **45** |
+| **Defects in controls v1.0.0 already had** | 20 | 13 | 13 | **46** |
 | Controls v1.0.0 did not have | 11 | 7 | 0 | 18 |
 
-The 45 are the measure of the method's value. They are bugs in gates that had unit tests,
+The 46 are the measure of the method's value. They are bugs in gates that had unit tests,
 99% branch coverage and an 80% mutation score. Examples:
 
 - A pull request could lower its own threshold, add its own waiver or exemption, or delete
@@ -179,7 +179,7 @@ differ.
 
 | What | Time | Note |
 |---|---|---|
-| Decision benchmark, 95 scenarios | 54 s | Runs on every change as part of `pytest`. |
+| Decision benchmark, 96 scenarios | 54 s | Runs on every change as part of `pytest`. |
 | Python drill, 4 changes | 2 min 30 s | pytest, coverage.py and mutmut, including tool start-up. |
 | TypeScript drill, 3 changes | 64 s | Vitest and StrykerJS. |
 | Go drill, 3 changes | 58 s | `go test` and gremlins. |

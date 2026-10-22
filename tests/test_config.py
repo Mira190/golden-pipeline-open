@@ -298,6 +298,23 @@ def test_invalid_merged_policy_falls_back_to_the_change(repo):
     assert policy.deferred[0].startswith("merged policy ignored: coverage.diff_min = 50")
 
 
+def test_invalid_merged_policy_never_lets_the_change_waive_or_exempt_itself(repo):
+    repo.commit({"golden.toml": "[coverage]\ndiff_min = 50\n"})
+    base = repo.git("rev-parse", "HEAD")
+    (repo.root / "golden.toml").write_text(
+        '[coverage]\ndiff_min = 92\n\n[presence]\nexempt = ["gen/**"]\n\n'
+        f'[waivers.mutation]\nreason = "later"\nexpires = {TODAY}\n'
+    )
+    policy = config.load(Path("golden.toml"), TODAY, base=base)
+    assert policy.get("coverage.diff_min") == 92
+    assert policy.exempt == ()
+    assert policy.waivers == {}
+    assert policy.deferred[1:] == (
+        "presence.exempt 'gen/**' applies after merge",
+        "waiver for mutation applies after merge",
+    )
+
+
 def test_invalid_change_policy_is_an_error_even_with_a_base(repo, history):
     (repo.root / "golden.toml").write_text("[coverage]\ndiff_min = 50\n")
     with pytest.raises(config.PolicyError, match="weaker than the platform floor"):

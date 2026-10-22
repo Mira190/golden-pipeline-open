@@ -223,6 +223,10 @@ def load(path: Path | None = None, today: dt.date | None = None, base: str = "")
         merged = _parse(text, f"{base[:12]}:{path}", today)
     except PolicyError as exc:
         # The merged policy fails today's rules (say, a raised floor); the change
-        # that repairs it must be able to pass, so judge it by its own policy.
-        return Policy(head.values, head.exempt, head.waivers, (f"merged policy ignored: {exc}",))
+        # that repairs it must be able to pass, so judge it by its own values, which
+        # meet the floors. Its own waivers and exemptions still wait for review.
+        deferred = [f"merged policy ignored: {exc}"]
+        deferred += [f"presence.exempt {e!r} applies after merge" for e in head.exempt]
+        deferred += [f"waiver for {gate} applies after merge" for gate in head.waivers]
+        return Policy(head.values, (), {}, tuple(deferred))
     return merge(merged, head)
