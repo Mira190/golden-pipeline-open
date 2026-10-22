@@ -16,7 +16,7 @@ re-run, and the limits of each measurement are stated with it.
 | It catches real bugs | [Real-fault benchmark](#3-real-bugs-from-real-projects): 10 real bugs from open-source libraries | The full pipeline flags 4, coverage alone 3; a surviving mutant sits on the faulty line in 6 | `uv run python evals/realfaults/run.py` |
 | It doesn't block legitimate work | 38 legitimate pull requests in the benchmark | 0 false blocks; v1.0.0 got 20 wrong | as above |
 | It holds against people who want to get round it | 42 gaming attempts in the benchmark | 0 escapes; v1.0.0 let 31 through | as above |
-| It fails closed | 16 corrupt or malformed inputs | 0 crashes, 0 silent passes | as above |
+| It fails closed | 16 corrupt or malformed inputs in the benchmark, plus 2.45 million generated inputs across nine parsers ([fuzzing](evaluation.md#0-evaluating-the-evaluator-how-this-repository-is-tested)) | 0 crashes, 0 silent passes. The first fuzzing run found about 40, all fixed | `HYPOTHESIS_PROFILE=fuzz uv run pytest tests/test_fuzz.py -n auto` |
 
 ## 1. The right merge decision
 
