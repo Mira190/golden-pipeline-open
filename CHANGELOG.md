@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+Static analysis on the diff:
+
+- `golden sast REPORT.sarif --base BASE` blocks on SARIF findings on the lines a change added or
+  modified, at or above `--min-level` (default `error`). Findings in untouched code are counted,
+  never blocking. It reads CodeQL's rule severities from the extension that defines the rule, and
+  honours suppressions and baselines. A report that is missing, empty, malformed, or has a
+  result with no location or an unknown level is an error. Waivable as `sast`.
+- `sast.yml` runs CodeQL without uploading anything (`contents: read`, `actions: read`) and
+  gates the findings. It is called next to `golden.yml`.
+
 Post-submit flaky-test scan:
 
 - `golden flaky-scan` compares the reports of repeated runs of one commit (JUnit XML from pytest

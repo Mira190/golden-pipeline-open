@@ -75,7 +75,7 @@ reason = "inherited module without tests; tracked in PLAT-123"
 expires = 2026-12-31
 ```
 
-- Allowed gates: `diff-coverage`, `coverage-ratchet`, `test-presence`, `mutation`, `scorecard`.
+- Allowed gates: `diff-coverage`, `coverage-ratchet`, `test-presence`, `mutation`, `scorecard`, `sast`.
 - `reason` is required.
 - `expires` is a TOML date (not a date-time) at most **90 days** ahead.
 - After expiry the gate is enforced again automatically.
@@ -262,3 +262,108 @@ Inputs:
 
 Output: `digest`. The caller must grant `contents: read`, `packages: write`, `id-token: write` and
 `attestations: write`; publishing happens only on pushes to the default branch.
+
+### Static analysis on the diff (optional)
+
+`sast.yml` runs [CodeQL](https://codeql.github.com/) and blocks a pull request only for the
+findings **it introduces**: the ones on lines the change added or modified. Findings in code the
+change does not touch are counted ("3 pre-existing findings outside this change"), never block
+and are never annotated. Showing an author the problem on the line they just edited, at review
+time, is how large codebases keep static analysis trusted and acted on (Google's Tricorder,
+Meta's Infer); a list of old findings nobody owns is not.
+
+The workflow does not upload anything to code scanning, so it needs no `security-events: write`
+and its findings do not appear in the Security tab. Keep a separate `codeql.yml` if you want
+them there.
+
+Call `sast.yml` as its own job next to `golden.yml`, not from inside it. It needs `actions: read`,
+which callers of `golden.yml` don't grant. To make it block merges, add the job to the required
+checks, or have your aggregating job `need` it.
+
+| Input | Default | Notes |
+|---|---|---|
+| `languages` | *required* | CodeQL languages, comma-separated: `python`, `javascript-typescript`, `go`, `actions`, ... |
+| `working-directory` | `.` | project directory (CodeQL's source root); reported paths and `golden.toml` are read relative to it |
+| `min-level` | `error` | lowest level that blocks: `error`, `warning` or `note` |
+| `build-mode` | empty | `none`, `autobuild` or `manual`; empty keeps CodeQL's default, which suits interpreted languages. **Go needs `autobuild`**; the Go toolchain is set up from `go.mod` |
+| `queries` | empty | extra queries or suites, e.g. `security-extended`; empty is CodeQL's default suite, the most precise one |
+| `runs-on` | `ubuntu-24.04` | runner label |
+| `egress-policy` | `audit` | harden-runner policy; `block` needs an allowlist |
+
+```yaml
+jobs:
+  sast:
+    permissions:
+      contents: read
+      actions: read
+    uses: Mira190/golden-pipeline-open/.github/workflows/sast.yml@<sha> # v1.x.y
+    with:
+      languages: python
+```
+
+**Permissions.** The workflow declares `contents: read` (checkout) and `actions: read`, so the
+calling job must grant both, or the run fails to start. CodeQL asks the Actions API which
+workflow run it belongs to even when nothing is uploaded; in a private repository that call
+needs `actions: read`, in a public one it works without. Without `security-events: read` CodeQL
+logs a warning that it cannot reach the code scanning API and runs without its experimental
+feature flags; the findings gate is unaffected.
+
+**Events.** On a pull request or in the merge queue the base comes from the event, as for every
+gate, and a blocking finding fails the job. On a push the job only reports what that push
+introduced (nothing blocks; a broken report still fails). On any other event there is no change
+to judge and the job says so.
+
+**What counts.**
+
+- A finding is *on the change* when its line range overlaps a changed line; a finding about a
+  file as a whole counts when the file changed.
+- The level is the result's own `level`, else the default of its rule (CodeQL keeps severities
+  there), else `warning`. Results with no severity (`none`, or a `kind` other than `fail`) are
+  ignored.
+- Results suppressed in the source (an accepted `suppressions` entry; one still `underReview` or
+  `rejected` does not hide the finding) and results a baseline marks `unchanged` or `absent` are
+  skipped. In-source suppressions stay visible in the diff, so reviewers can challenge them.
+- At most 50 findings are annotated and listed, the most severe first; every blocking finding
+  still fails the gate.
+
+### `golden sast`
+
+The gate itself is tool-neutral. It reads any SARIF 2.1.0 report:
+
+```bash
+golden sast REPORT.sarif [REPORT.sarif ...] --base "$BASE" [--min-level error|warning|note]
+```
+
+Exit 0 passes (or the gate is waived), exit 1 blocks, and exit 2 means the input is broken. It
+fails closed: a missing or empty report, invalid JSON, a file with no `runs` list, a result
+without a physical location, an unknown level or an invalid region is exit 2, never a pass. A
+valid report with no results passes. Locations may be relative paths, absolute paths or
+`file://` URIs (with `uriBaseId` resolved through `originalUriBaseIds`); run the gate in the
+directory the paths are relative to.
+
+Any SARIF-emitting tool can feed it, for example Ruff or Semgrep (neither fails the step when it
+finds something, because the gate decides):
+
+```yaml
+- run: ruff check --output-format sarif --output-file ruff.sarif --exit-zero .
+- run: golden sast ruff.sarif --base "$BASE" --min-level warning
+```
+
+```yaml
+- run: semgrep scan --config auto --sarif --output semgrep.sarif
+- run: golden sast semgrep.sarif --base "$BASE"
+```
+
+Several reports (one per language or per tool) can be passed at once; the same finding reported
+twice counts once. Run the CLI as `golden local` is run in [adoption](adoption.md)
+(`uvx --from git+https://github.com/Mira190/golden-pipeline-open@<sha> golden sast ...`), in a
+checkout with full history, and take `BASE` from the event the way `security.yml` does
+(`github.event.pull_request.base.sha || github.event.merge_group.base_sha`).
+
+**Waiver.** Like any gate, it can be switched to report-only for a limited time:
+
+```toml
+[waivers.sast]
+reason = "adopting CodeQL; existing findings tracked in SEC-42"
+expires = 2026-12-31
+```

@@ -32,6 +32,7 @@ from golden import (
     plan,
     presence,
     presets,
+    sarif,
 )
 from golden import scorecard as sc
 from golden.globmatch import match_any
@@ -310,6 +311,27 @@ def cmd_mutation(args: argparse.Namespace) -> int:
     )
 
 
+# ----------------------------------------------------------------- sast
+def cmd_sast(args: argparse.Namespace) -> int:
+    policy = _policy(args)
+    changed, outside = sarif.narrow(sarif.read(args.report), gitdiff.changed_lines(args.base))
+    shown = changed[: sarif.MAX_LISTED]
+    prefix = gitdiff.repo_prefix() if shown else ""
+    for f in shown:
+        annotate(
+            "error" if f.blocks(args.min_level) else "warning",
+            f"{f.rule}: {f.message}",
+            file=prefix + f.file,
+            line=f.line,
+        )
+    return verdict(
+        "Static analysis",
+        passed=not any(f.blocks(args.min_level) for f in changed),
+        detail=sarif.detail(changed, outside, args.min_level),
+        waived=_waived(policy, "sast"),
+    )
+
+
 # ----------------------------------------------------------------- scorecard
 def cmd_scorecard(args: argparse.Namespace) -> int:
     policy = _policy(args)
@@ -408,6 +430,19 @@ def _add_flaky_scan_parser(sub: argparse._SubParsersAction[argparse.ArgumentPars
     p.set_defaults(func=cmd_flaky_scan)
 
 
+def _add_sast_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    p = sub.add_parser("sast", help="gate: no new static-analysis findings on changed lines")
+    p.add_argument("report", type=Path, nargs="+", help="SARIF 2.1.0 report(s)")
+    p.add_argument("--base", required=True)
+    p.add_argument(
+        "--min-level",
+        choices=sarif.THRESHOLDS,
+        default="error",
+        help="lowest SARIF level that blocks the merge (default: error)",
+    )
+    p.set_defaults(func=cmd_sast)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="golden", description=__doc__)
     parser.add_argument("--version", action="version", version=f"golden {__version__}")
@@ -464,6 +499,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="with --base, also count mutants in source functions the changed tests touch",
     )
     p.set_defaults(func=cmd_mutation)
+
+    _add_sast_parser(sub)
 
     p = sub.add_parser("scorecard", help="gate: repository maturity level")
     p.add_argument("--root", type=Path, default=Path())

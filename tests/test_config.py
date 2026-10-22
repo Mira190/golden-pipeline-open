@@ -96,6 +96,12 @@ def test_invalid_waivers(spec, message):
         load(waiver(**spec))
 
 
+def test_the_static_analysis_gate_can_be_waived():
+    policy = load({"waivers": {"sast": {"reason": "legacy module", "expires": TODAY}}})
+    assert policy.waiver("sast", TODAY) == config.Waiver("sast", "legacy module", TODAY)
+    assert policy.waiver("sast", TODAY + dt.timedelta(days=1)) is None
+
+
 def test_waiver_for_unknown_gate():
     with pytest.raises(config.PolicyError, match="unknown gate"):
         load({"waivers": {"lint": {"reason": "x", "expires": TODAY}}})

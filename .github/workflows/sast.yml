@@ -1,0 +1,115 @@
+# Static analysis on the diff. CodeQL scans the repository, but only the findings that lie on
+# lines the change added or modified can block it (the way Google's Tricorder and Meta's Infer
+# report); findings in untouched code are counted, never blocking. Nothing is uploaded to code
+# scanning, so the job needs no `security-events: write`. Call it next to golden.yml, not from
+# it: it needs `actions: read`, which golden.yml's callers don't grant.
+#
+#   jobs:
+#     sast:
+#       permissions:
+#         contents: read
+#         actions: read # CodeQL reads the workflow run to name the analysis (private repositories)
+#       uses: Mira190/golden-pipeline-open/.github/workflows/sast.yml@<sha> # v1.x.y
+#       with:
+#         languages: python
+#
+# Any other SARIF tool (Semgrep, Ruff, golangci-lint, ESLint) feeds the same gate:
+# `golden sast report.sarif --base "$BASE"`; see docs/configuration.md.
+name: golden-sast
+
+on:
+  workflow_call:
+    inputs:
+      languages:
+        description: >-
+          CodeQL languages, comma-separated (actions, go, java-kotlin, javascript-typescript,
+          python, ruby, ...).
+        type: string
+        required: true
+      working-directory:
+        description: Project directory inside the repository (monorepos).
+        type: string
+        default: "."
+      min-level:
+        description: Lowest finding level that blocks the merge (error, warning or note).
+        type: string
+        default: error
+      build-mode:
+        description: >-
+          CodeQL build mode (none, autobuild or manual). Empty keeps CodeQL's default, which
+          suits interpreted languages; Go needs autobuild.
+        type: string
+        default: ""
+      queries:
+        description: Extra CodeQL queries or suites, e.g. security-extended (empty = default suite).
+        type: string
+        default: ""
+      runs-on:
+        type: string
+        default: ubuntu-24.04
+      egress-policy:
+        description: harden-runner egress policy (audit or block).
+        type: string
+        default: audit
+
+permissions: {}
+
+jobs:
+  sast:
+    name: sast
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 30
+    # No security-events: write, because upload is off. contents: read is the checkout;
+    # actions: read is what CodeQL's post-processing needs in private repositories: it asks
+    # the Actions API for the workflow run it belongs to, even when nothing is uploaded.
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: ${{ inputs.egress-policy }}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # Installs the golden CLI; for Go also the toolchain autobuild needs (go.mod's version).
+      - uses: $/actions/setup
+        with:
+          language: ${{ contains(inputs.languages, 'go') && 'go' || '' }}
+          working-directory: ${{ inputs.working-directory }}
+      - uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          languages: ${{ inputs.languages }}
+          build-mode: ${{ inputs.build-mode }}
+          queries: ${{ inputs.queries }}
+          source-root: ${{ inputs.working-directory }}
+      - id: analyze
+        uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          # Keep the SARIF on the runner: the golden gate reads it, code scanning never sees it.
+          upload: never
+          upload-database: false
+          output: ${{ runner.temp }}/golden-sast
+      - name: Findings on the changed lines
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          SARIF_DIR: ${{ steps.analyze.outputs.sarif-output }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          BEFORE: ${{ github.event.before }}
+          EVENT: ${{ github.event_name }}
+          MIN_LEVEL: ${{ inputs.min-level }}
+        # One SARIF file per language. If none was written the unexpanded glob names a missing
+        # file and the gate fails closed.
+        run: |
+          if [ -n "$BASE" ]; then
+            golden sast "$SARIF_DIR"/*.sarif --base "$BASE" --min-level "$MIN_LEVEL"
+          elif [ "$EVENT" = push ] && [ -n "$BEFORE" ] && [ "$BEFORE" != 0000000000000000000000000000000000000000 ]; then
+            # After the merge: report what the push introduced, block nothing. Exit 1 is a
+            # finding at the blocking level; 2 is a broken report, which still fails the job.
+            status=0
+            golden sast "$SARIF_DIR"/*.sarif --base "$BEFORE" --min-level "$MIN_LEVEL" || status=$?
+            [ "$status" -le 1 ]
+          else
+            echo "::notice::this event has no base commit to judge; static analysis is not gated"
+          fi

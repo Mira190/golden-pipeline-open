@@ -163,6 +163,29 @@ next-line`, or `--exclude-files` for gremlins. Keep the list short and commented
 that filtering arid nodes is what turns mutation testing from noise (15% of mutants useful) into
 signal (89%).
 
+## Static analysis on the diff (optional)
+
+**Question:** does this change introduce a static-analysis finding?
+
+`golden sast` reads SARIF 2.1.0 reports and keeps only the findings on lines the change added or
+modified. The reports can come from CodeQL through
+[`sast.yml`](../.github/workflows/sast.yml), or from Semgrep, Ruff, golangci-lint or ESLint.
+
+- **Blocks:** a finding on a changed line at or above `min-level` (default `error`).
+- **Doesn't block:** findings in untouched code. They are counted as "N pre-existing findings
+  outside this change".
+- **Skipped:** results suppressed in the source (an absent or `accepted` suppression status), and
+  results a baseline already knows.
+- **Fails closed:** a missing, empty or non-SARIF report, a result without a location or an
+  unknown level is an error.
+- **Waiver:** `[waivers.sast]`.
+
+**Why only the diff.** A finding shown on the line the author just edited, at review time, gets
+fixed. A backlog of old findings doesn't.
+[Tricorder](https://research.google/pubs/tricorder-building-a-program-analysis-ecosystem/) and
+[Infer](https://cacm.acm.org/research/scaling-static-analyses-at-facebook/) both report this way.
+Setup is in [configuration](configuration.md#static-analysis-on-the-diff-optional).
+
 ## Repository scorecard
 
 **Question:** is the repository set up so that the gates can't be bypassed?

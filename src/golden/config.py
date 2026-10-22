@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-GATES = ("diff-coverage", "coverage-ratchet", "test-presence", "mutation", "scorecard")
+GATES = ("diff-coverage", "coverage-ratchet", "test-presence", "mutation", "sast", "scorecard")
 MAX_WAIVER_DAYS = 90
 # An exemption that names no directory or file stem ("**", "*.py", "**/*")
 # switches test presence and mutation off for a whole language: that is a
