@@ -118,13 +118,16 @@ and was at least 7 days old when pinned.
 | format | `uvx ruff@0.17.0 format --check --diff .` |
 | lint | `uvx ruff@0.17.0 check --output-format=github .` |
 | typecheck | `uv run --with mypy==2.4.0 mypy .` |
-| test | `uv run --with pytest-cov==7.1.0 --with pytest-xdist==3.8.0 --with pytest-randomly==5.0.0 pytest -n auto -p randomly --cov --cov-report=xml:coverage.xml` |
+| test | `uv run --with pytest-cov==7.1.0 --with pytest-xdist==3.8.0 --with pytest-randomly==5.0.0 --with pytest-timeout==2.5.0 pytest -n auto -p randomly --timeout=300 --cov --cov-report=xml:coverage.xml --cov-report=term` |
 | mutation | `mutmut run $GOLDEN_MUTATE && mutmut export-cicd-stats` (mutmut 3.8.0) |
 
 Requirements:
 
 - a `uv.lock`
 - pytest in your dev dependencies (the plugins are added with `--with`)
+- tests that finish within 300 s each. `--timeout=300` kills a hung test with a stack trace, the
+  ceiling of a Google "medium" test. Vitest (5 s) and `go test` (10 min) have defaults of their
+  own. Mark a slower test with `@pytest.mark.timeout(...)`.
 - `[tool.coverage.run] relative_files = true`
 - a `[tool.mutmut]` section (`source_paths = ["src/yourpkg/"]`)
 

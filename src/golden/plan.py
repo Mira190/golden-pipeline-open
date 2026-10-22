@@ -23,8 +23,12 @@ from golden.globmatch import match_any
 ZERO_SHA = "0" * 40
 
 PY_TEST_PLUGINS = (
-    "--with pytest-cov==7.1.0 --with pytest-xdist==3.8.0 --with pytest-randomly==5.0.0"
+    "--with pytest-cov==7.1.0 --with pytest-xdist==3.8.0 --with pytest-randomly==5.0.0 "
+    "--with pytest-timeout==2.5.0"
 )
+# Per-test ceiling, Google's "medium" test size: a hung test fails in minutes with
+# a stack trace instead of burning the job timeout (Vitest and `go test` have one).
+PY_TEST_TIMEOUT = "--timeout=300"
 MUTMUT = "uv run --with mutmut==3.8.0 mutmut"
 GO_TOOLS = {
     "cobertura": "github.com/boumenot/gocover-cobertura@v1.5.0",
@@ -39,11 +43,11 @@ DEFAULTS: dict[str, dict[str, str]] = {
         "format-command": "uvx ruff@0.17.0 format --check --diff .",
         "lint-command": "uvx ruff@0.17.0 check --output-format=github .",
         "typecheck-command": "uv run --with mypy==2.4.0 mypy .",
-        "test-command": f"uv run {PY_TEST_PLUGINS} pytest -n auto -p randomly "
+        "test-command": f"uv run {PY_TEST_PLUGINS} pytest -n auto -p randomly {PY_TEST_TIMEOUT} "
         "--cov --cov-report=xml:coverage.xml --cov-report=term",
         "coverage-report": "coverage.xml",
         "flaky-command": f"uv run {PY_TEST_PLUGINS} --with pytest-repeat==0.9.4 pytest -n auto "
-        '-p randomly --count="$GOLDEN_REPEATS" $GOLDEN_TESTS',
+        f'-p randomly {PY_TEST_TIMEOUT} --count="$GOLDEN_REPEATS" $GOLDEN_TESTS',
         "mutation-command": f"{MUTMUT} run $GOLDEN_MUTATE && {MUTMUT} export-cicd-stats",
         "mutation-report": "mutants/mutmut-cicd-stats.json",
         "mutation-format": "mutmut",

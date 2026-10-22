@@ -147,6 +147,35 @@ EXPECTED = {
     "no-tests": {"diff-coverage": False, "presence": False, "mutation": False},
     "weak": {"diff-coverage": True, "presence": True, "mutation": False},
     "strong": {"diff-coverage": True, "presence": True, "mutation": True},
+    # The coverage report is written by the code under test, so a conftest can
+    # forge it: diff coverage and test presence are fooled *by design*. Mutation
+    # testing re-runs the tests under its own control and must still block.
+    "forged-coverage": {"diff-coverage": True, "presence": True, "mutation": False},
+}
+
+FORGED = {
+    "python": {
+        "tests/conftest.py": """import atexit
+import re
+from pathlib import Path
+
+
+def _forge() -> None:
+    report = Path("coverage.xml")
+    if report.exists():
+        text = report.read_text().replace('hits="0"', 'hits="1"')
+        report.write_text(re.sub(r'(line|branch)-rate="[0-9.]+"', r'\\1-rate="1"', text))
+
+
+atexit.register(_forge)
+""",
+        "tests/test_bulk.py": """import pricing.core
+
+
+def test_module_loads():
+    assert pricing.core.bulk_discount_percent
+""",
+    },
 }
 
 
@@ -198,7 +227,10 @@ def scenario(language: str, name: str, workdir: Path) -> dict[str, bool]:
 
     with (project / feature.source).open("a", encoding="utf-8") as fh:
         fh.write(feature.code)
-    if name != "no-tests":
+    if name == "forged-coverage":
+        for rel, text in FORGED[language].items():
+            (project / rel).write_text(text)
+    elif name != "no-tests":
         (project / feature.test_file).write_text(feature.weak if name == "weak" else feature.strong)
     git(repo, "add", "-A")
     git(repo, "commit", "-qm", name)
@@ -279,6 +311,8 @@ def main(languages: list[str]) -> int:
         for language in languages:
             prepare(language)
             for name, expected in EXPECTED.items():
+                if name == "forged-coverage" and language not in FORGED:
+                    continue
                 got = scenario(language, name, Path(tmp))
                 ok = got == expected
                 failures += [] if ok else [f"{language}/{name}: expected {expected}, got {got}"]

@@ -326,3 +326,11 @@ def test_gating_changes(repo, monkeypatch):
         "golden.toml",
     ]
     assert plan.gating_changes("", Path("golden.toml")) == []
+
+
+def test_python_defaults_bound_every_test_in_time():
+    # A hung test must fail with a stack trace, not burn the job's 30-minute timeout.
+    for key in ("test-command", "flaky-command"):
+        command = plan.DEFAULTS["python"][key]
+        assert "--with pytest-timeout==2.5.0" in command
+        assert "--timeout=300" in command
