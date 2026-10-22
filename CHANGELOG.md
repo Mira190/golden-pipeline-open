@@ -2,6 +2,50 @@
 
 ## Unreleased
 
+A change never grades itself:
+
+- On pull requests and in the merge queue, every gate reads `golden.toml` **at the base commit**.
+  The change may tighten the policy. Anything that loosens it applies only after merge, and is
+  listed under "Not applied to this change": a lower threshold, a new or extended waiver, a new
+  exemption, or deleting the file. `golden local` plans with the policy at the merge-base too.
+- Scorecard L3 gains two controls:
+  - `owner-review`: the ruleset requires code-owner review, and CODEOWNERS owns
+    `.github/workflows/` and the `golden.toml` in use.
+  - `gates-on`: no caller sets `mutation`, `security` or `workflow-lint` to `false`.
+
+  Repositories without code-owner review drop from L3 to L2.
+
+Measured: a new gate decision benchmark (`evals/`, also run by `tests/test_evals.py`). It holds
+80 labelled pull requests (legitimate, gaming and malformed), replayed through the real CLI and
+scored as escapes, false blocks, robustness failures and crashes. Against v1.0.0 it finds 21
+escapes, 16 false blocks and 13 robustness failures, 7 of them tracebacks. All are fixed below
+except one documented gap.
+
+Fewer false blocks:
+
+- Python test code now includes Django's `tests.py` and helpers under any `tests/` or `test/`
+  directory. Relative imports (`from ..core import f`) count as references; comments don't.
+- Node: `order.service.ts` is referenced by imports of `./order.service`, and `cart/index.ts` by
+  `./cart/index.js`. `src/test/` and nested `tests/` directories are test code.
+- Multi-line workflow inputs (a YAML `|` block for `test-command`) are written to job outputs
+  with random heredoc delimiters, which also rules out output injection.
+
+More fail-closed checks:
+
+- `golden.toml` rejects fractional `repeats` and levels, values no change could ever meet
+  (`min_level = 5`, `diff_min = 101`, a negative ratchet tolerance), and unknown keys inside a
+  waiver.
+- Scorecard: YAML comments never satisfy a control. A real `cooldown:` or `minimumReleaseAge`
+  is required. `permissions: write-all` or a top-level `write` scope fails least privilege.
+  `on: [push, pull_request]` counts as PR CI. Lockfiles under `node_modules/`, `vendor/` and
+  `.venv/` don't count. Renovate is found in all of its config locations.
+- Mutation: `--format mutation-testing-elements` (Stryker.NET, Stryker4s). A malformed report is
+  an error. Absolute paths are resolved against the report's `projectRoot`.
+- A truncated Cobertura report is an error with a message.
+- `golden dora` validates each record and names the bad line. It reports the 2024 metric
+  `deployment_rework_rate` from an optional `rework` field.
+- Annotation file paths are escaped (`,` and `:`), so the annotations land on the right file.
+
 Fail-closed fixes. Each closes a way a gate could pass without checking anything:
 
 - Diff coverage now fails when a changed source file is **missing from the coverage report**.

@@ -265,6 +265,32 @@ GOLDEN_CALL = f"jobs:\n  ci:\n    uses: o/golden-pipeline/.github/workflows/gold
         (GOLDEN_CALL + "    with:\n      mutation: true\n", True),
         (GOLDEN_CALL + "    with:\n      # mutation: false\n", True),
         ("jobs:\n  other:\n    with:\n      mutation: false\n", True),
+        # Repository-wide scans need one caller only; mutation is needed in every project.
+        (
+            GOLDEN_CALL
+            + GOLDEN_CALL.replace("jobs:\n  ci", "  b")
+            + "    with:\n      security: false\n",
+            True,
+        ),
+        (
+            GOLDEN_CALL
+            + GOLDEN_CALL.replace("jobs:\n  ci", "  b")
+            + "    with:\n      workflow-lint: false\n",
+            True,
+        ),
+        (
+            GOLDEN_CALL
+            + GOLDEN_CALL.replace("jobs:\n  ci", "  b")
+            + "    with:\n      mutation: false\n",
+            False,
+        ),
+        (
+            GOLDEN_CALL
+            + "    with:\n      security: false\n"
+            + GOLDEN_CALL.replace("jobs:\n  ci", "  b")
+            + "    with:\n      security: false\n",
+            False,
+        ),
     ],
 )
 def test_gates_enabled(tmp_path, ci, expected):

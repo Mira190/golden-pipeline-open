@@ -56,6 +56,14 @@ detection correlates with real-fault detection more strongly than statement cove
   shown mutants write more tests, and mutants were coupled to **70%** (1,043 of 1,502) of
   high-priority real bugs on the change that introduced them.
 
+**A caveat worth stating.** Papadakis et al., "Are Mutation Scores Correlated with Real Fault
+Detection?" (ICSE 2018) found the correlation between mutation score and real-fault detection
+*weak* once test-suite size is controlled for. Suites with higher mutation scores still detected
+significantly more real faults than random suites of the same size. Mutation score is therefore a
+floor that blocks hollow tests, not a proof of quality. That's one reason the gate threshold
+(80%) is well below 100%, and why the [evaluation guide](evaluation.md) recommends replaying
+real faults as well as mutants.
+
 → **Design:**
 
 - Mutation testing runs on pull requests and is **scoped to the changed lines or functions**,
@@ -177,6 +185,50 @@ rollout controller. Rollout itself is environment-specific and out of scope here
 
   The [security model](security-model.md) maps each one to the control that addresses it.
 
+## 11. A change never grades itself
+
+Separation of duties is the oldest control in change management. The supply-chain frameworks
+restate it for CI:
+
+- **SLSA**'s source track requires two-person review of changes.
+- **GitHub** offers organisation rulesets that *require a workflow* from a central repository, so
+  a pull request cannot edit the check that judges it.
+
+v1.0.0 of this repository broke the rule in two places. The decision benchmark
+([`evals/`](../evals/README.md)) found the first, and a red-team review found the second:
+
+- The gates read `golden.toml` from the branch under review, so a pull request could lower its
+  own thresholds or grant itself a waiver.
+- On `pull_request` events GitHub runs the *pull request's* copy of the caller workflow.
+
+→ **Design:**
+
+- Every gate reads the policy at the pull request's base commit. The change may tighten it;
+  loosening applies after merge.
+- The scorecard's L3 requires code-owner review of `.github/workflows/` and `golden.toml`, and
+  fails any caller that switches a gate off.
+- Organisation-wide, require the workflow through a ruleset. See
+  [adoption](adoption.md) and the [security model](security-model.md).
+
+## 12. Related projects: what is reused, adapted, or left out
+
+Every gate here has prior art. Where a mature tool exists, the pipeline calls it rather than
+re-implementing it. The `golden` CLI only adds the parts that are missing: diff scoping across
+tools, one score definition, fail-closed handling and policy.
+
+| Concern | Prior art | Used here as | Notes |
+|---|---|---|---|
+| Diff coverage | [diff-cover](https://github.com/Bachmann1234/diff_cover); Codecov/Coveralls patch status; SonarQube "Clean as You Code" (80% on new code) | **reused**: diff-cover computes the number; `golden` adds fail-closed handling of unmeasured files and the policy floor | SonarQube ignores coverage on changes under 20 lines (its "fudge factor"). Not adopted, because a small change to billing code deserves a test too. |
+| Diff-scoped mutation | Google's diff-based mutation service; [cargo-mutants `--in-diff`](https://mutants.rs/in-diff.html); StrykerJS `--mutate file:lines` and `--incremental`; PIT with git integration | **adapted**: the same "mutants overlapping the diff" rule, implemented once for mutmut (functions), Stryker (line ranges) and gremlins (filtered report) | cargo-mutants warns that a diff-scoped run is no substitute for an occasional full run. Run a scheduled full mutation pass (for example weekly) to find tests weakened outside the diff. |
+| Mutation report format | [mutation-testing-elements](https://github.com/stryker-mutator/mutation-testing-elements) schema (StrykerJS, Stryker.NET, Stryker4s, muttest) | **reused**: `--format mutation-testing-elements` reads any compliant report | Makes the mutation gate usable for .NET and Scala without new code. |
+| "Did they add a test?" | [Danger](https://danger.systems) rules ("app files changed, no test files changed"), GitLab's Danger roulette | **adapted** into a blocking gate, with import resolution instead of "path contains `test`" | Danger rules warn; here the PR label is the escape hatch, and the evals check that gaming it (comments, unrelated tests) fails. |
+| Flaky tests | pytest-flakefinder, pytest-repeat, DeFlaker / pytest-flakefighters, iDFlakies, Mergify's "rerun new tests" | **adapted**: re-run *changed* runnable tests N× (cheapest point, Luo 2014) | DeFlaker-style classification (a failing test that covers no changed line is probably flaky) would cut false blocks on unrelated failures. It is a candidate for a later version. |
+| Repository maturity | [OpenSSF Scorecard](https://github.com/ossf/scorecard), Allstar, Legitify, safe-settings | **complemented**: `golden scorecard` checks the controls that keep *these* gates un-bypassable; OpenSSF Scorecard runs alongside | "Unknown never counts as a pass" is borrowed from Scorecard's treatment of missing API access. |
+| Expiring exceptions | OSV-Scanner `[[IgnoredVulns]] ignoreUntil / reason` | **same model** as `[waivers.<gate>]` (reason, at most 90 days) | Use OSV-Scanner's file for vulnerability exceptions, so one review pattern covers both. |
+| Delivery metrics | [dora-team/fourkeys](https://github.com/dora-team/fourkeys) (archived), Apache DevLake | **minimal re-implementation**: `golden dora` computes the five metrics from a JSON Lines log, offline | Use DevLake when you want dashboards and incident joins. `golden dora` is for a quick, scriptable check. |
+| Workflow security | zizmor, actionlint + shellcheck, poutine, harden-runner | **reused** in `security.yml` | — |
+| Real-fault benchmarks | Defects4J (Java), BugsInPy (Python) | **recommended** for the next evaluation layer | See [evaluation](evaluation.md#0-evaluating-the-evaluator-how-this-repository-is-tested). |
+
 ## Principles, and where they live in this repository
 
 | # | Principle | Evidence | Implementation |
@@ -191,3 +243,5 @@ rollout controller. Rollout itself is environment-specific and out of scope here
 | 8 | Progressive, verifiable delivery; no exempt change types | Amazon; SRE Workbook; CrowdStrike RCA | `container.yml`, signed provenance |
 | 9 | Small batches, measured with DORA | DORA 2024/2025 | `golden dora`, evaluation guide |
 | 10 | One maintained paved road with supply-chain hardening | Spotify; 2025–26 incidents | reusable workflows, pinned, least privilege |
+| 11 | A change never grades itself | separation of duties; SLSA source track; required workflows | base-anchored `golden.toml`, scorecard `owner-review` and `gates-on` |
+| 12 | Measure the gates' decisions, not just their code | drills; escaped-defect review | `evals/` decision benchmark, `scripts/drill.py` |

@@ -35,7 +35,8 @@ USES = re.compile(r"^\s*(?:-\s*)?uses:\s*['\"]?([^\s'\"#]+)", re.MULTILINE)
 # The `pull_request` trigger, not `pull_request_target` or `github.event.pull_request`.
 PR_TRIGGER = re.compile(r"(?<![\w.'\"-])pull_request(?![\w-])")
 YAML_COMMENT = re.compile(r"(^|\s)#.*$", re.MULTILINE)
-DISABLED_GATE = re.compile(r"^\s*(mutation|security|workflow-lint)\s*:\s*false\b", re.MULTILINE)
+# `<input>: false` in a caller's `with:` block.
+SWITCHED_OFF = "^\\s*{}\\s*:\\s*false\\b"
 DEPS_BOT_FILES = (
     ".github/dependabot.yml",
     ".github/dependabot.yaml",
@@ -181,10 +182,20 @@ def least_privilege(repo: Repo) -> bool:
 
 
 def gates_enabled(repo: Repo) -> bool:
-    """Callers may not switch gates off; a time-boxed waiver in golden.toml is the way."""
-    return not any(
-        GOLDEN_WORKFLOW.search(t) and DISABLED_GATE.search(t) for t in repo.workflows().values()
-    )
+    """Callers may not switch gates off; a time-boxed waiver in golden.toml is the way.
+
+    Mutation testing is per project, so no caller may skip it. The security scans cover the
+    whole repository, so one caller running them is enough (a monorepo scans once).
+    """
+    callers = "\n".join(t for t in repo.workflows().values() if GOLDEN_WORKFLOW.search(t))
+    calls = len(GOLDEN_WORKFLOW.findall(callers))
+
+    def off(name: str) -> int:
+        return len(re.findall(SWITCHED_OFF.format(re.escape(name)), callers, re.MULTILINE))
+
+    if not calls:
+        return True  # nothing to switch off; "Calls a Golden Pipeline workflow" fails instead
+    return off("mutation") == 0 and off("security") < calls and off("workflow-lint") < calls
 
 
 def provenance(repo: Repo) -> bool:

@@ -124,3 +124,23 @@ stdout_contains = ["| L1 | Dependencies are locked | ❌ |"]
 [scenario.head]
 "package.json" = "{}\n"
 "node_modules/left-pad/package-lock.json" = "{}\n"
+
+[[scenario]]
+id = "scorecard/monorepo-scans-once"
+gate = "scorecard"
+category = "legit"
+why = "A monorepo runs the repository-wide security scan from one caller and skips it in the others."
+argv = ["scorecard", "--root", "{root}"]
+stdout_contains = ["| L3 | No gate switched off in the caller workflow | ✅ |"]
+[scenario.head]
+".github/workflows/ci.yml" = "on: pull_request\npermissions: {}\njobs:\n  root:\n    uses: o/golden-pipeline-open/.github/workflows/golden.yml@0123456789abcdef0123456789abcdef01234567\n    with:\n      language: python\n  api:\n    uses: o/golden-pipeline-open/.github/workflows/golden.yml@0123456789abcdef0123456789abcdef01234567\n    with:\n      language: go\n      working-directory: api\n      security: false\n"
+
+[[scenario]]
+id = "scorecard/every-caller-skips-security"
+gate = "scorecard"
+category = "gaming"
+why = "Every caller switches the security scan off, so secrets and vulnerable dependencies are never checked."
+argv = ["scorecard", "--root", "{root}"]
+stdout_contains = ["| L3 | No gate switched off in the caller workflow | ❌ |"]
+[scenario.head]
+".github/workflows/ci.yml" = "on: pull_request\npermissions: {}\njobs:\n  root:\n    uses: o/golden-pipeline-open/.github/workflows/golden.yml@0123456789abcdef0123456789abcdef01234567\n    with:\n      language: python\n      security: false\n  api:\n    uses: o/golden-pipeline-open/.github/workflows/golden.yml@0123456789abcdef0123456789abcdef01234567\n    with:\n      language: go\n      working-directory: api\n      security: false\n"
