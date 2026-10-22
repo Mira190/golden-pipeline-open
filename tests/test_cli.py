@@ -549,3 +549,42 @@ def test_local_plans_with_the_policy_at_the_merge_base(repo, capsys):
     assert cli.main(argv) == 0
     # The exemption the change adds is not applied to the change itself, as in CI.
     assert "GOLDEN_MUTATE='pkg.a.x_f__mutmut_*'" in capsys.readouterr().out
+
+
+def test_policy_summary_is_exact(repo, monkeypatch, capsys):
+    expires = dt.datetime.now(dt.UTC).date() + dt.timedelta(days=30)
+    waiver = f'[waivers.scorecard]\nreason = "new repo"\nexpires = {expires}\n'
+    repo.commit({"golden.toml": "[coverage]\ndiff_min = 95\n" + waiver})
+    pull_request(repo, monkeypatch, repo.git("rev-parse", "HEAD"))
+    head = (
+        '[coverage]\ndiff_min = 85\n[waivers.mutation]\nreason = "x"\n' + f"expires = {expires}\n"
+    )
+    (repo.root / "golden.toml").write_text(head + waiver)
+    summary = repo.root / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    assert cli.main(["policy", "check"]) == 0
+    assert summary.read_text() == (
+        "### Golden policy\n\n| Key | Value | Floor |\n|---|---|---|\n"
+        "| `coverage.diff_min` | 95 | 80 |\n"
+        "| `coverage.ratchet_tolerance` | 0.5 | 2 |\n"
+        "| `mutation.min_score` | 80 | 60 |\n"
+        "| `flaky.repeats` | 10 | 3 |\n"
+        "| `scorecard.min_level` | 2 | 1 |\n\n"
+        f"**Waivers**\n\n- **scorecard** until {expires}: new repo\n\n"
+        "**Not applied to this change**\n\n"
+        "- coverage.diff_min = 85 applies after merge (now 95)\n"
+        "- waiver for mutation applies after merge\n\n"
+    )
+
+
+def test_scorecard_json_and_verdict_are_exact(repo, monkeypatch, capsys):
+    expires = dt.datetime.now(dt.UTC).date() + dt.timedelta(days=30)
+    (repo.root / "golden.toml").write_text(
+        f'[waivers.scorecard]\nreason = "new repo"\nexpires = {expires}\n'
+    )
+    assert cli.main(["scorecard", "--json", "score.json"]) == 0
+    text = (repo.root / "score.json").read_text()
+    assert text.startswith('{\n  "level": 0,\n  "controls": [\n    {\n      "id": "pr-ci",\n')
+    out = capsys.readouterr().out
+    assert "#### ⚠️ Scorecard: failed (waived)\n\nLevel 0 (minimum 2)." in out
+    assert f"::warning::scorecard is waived until {expires}: new repo" in out

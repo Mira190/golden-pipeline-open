@@ -318,3 +318,24 @@ def test_blanket_exemptions_are_rejected(glob):
 @pytest.mark.parametrize("glob", ["src/generated/**", "*_pb2.py", "**/legacy_adapter.py", "gen/*"])
 def test_targeted_exemptions_are_allowed(glob):
     assert load({"presence": {"exempt": [glob]}}).exempt == (glob,)
+
+
+def test_error_messages_list_every_problem():
+    with pytest.raises(config.PolicyError, match=r"^unknown section\(s\): a, b$"):
+        load({"b": {}, "a": {}})
+    with pytest.raises(
+        config.PolicyError,
+        match=r"^unknown key\(s\) in \[coverage\]: x, y; known: diff_min, ratchet_tolerance$",
+    ):
+        load({"coverage": {"y": 1, "x": 2}})
+    with pytest.raises(
+        config.PolicyError, match=r"^presence.exempt must be a list of glob strings$"
+    ):
+        load({"presence": {"exempt": "gen/**"}})
+    with pytest.raises(config.PolicyError, match=r"^\[waivers\] must be a table$"):
+        load({"waivers": 1})
+
+
+def test_load_defaults_to_golden_toml_in_the_working_directory(repo):
+    (repo.root / "golden.toml").write_text("[mutation]\nmin_score = 91\n")
+    assert config.load(today=TODAY).get("mutation.min_score") == 91
