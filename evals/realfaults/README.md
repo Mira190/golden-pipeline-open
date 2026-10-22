@@ -52,10 +52,10 @@ By fault kind: 8 bugs where the fix rewrites existing lines (`modified`) and 2 w
 - **Mutants were coupled to the bug more often than the gate blocked.** A survivor sat on a
   faulty line in 6 of 10. In two of the six that passed the 80% gate (toolz `partition_all`,
   tabulate asciidoc) the score was high enough to wave the function through while the bug's own
-  line had a survivor. The gate blocks only on the score. For Stryker and gremlins reports it
-  also shows each survivor on its line. For mutmut, as used here, it read only the totals, so a
-  reviewer would not have seen these survivors. This benchmark found that gap; see
-  [value](../../docs/value.md#3-real-bugs-from-real-projects).
+  line had a survivor. The gate blocks only on the score. For mutmut, as used here, it used to
+  read only the totals, so a reviewer would not have seen these survivors. This benchmark found
+  that gap. The gate now also shows Python survivors on their line, as it already did for Stryker
+  and gremlins; see [value](../../docs/value.md#3-real-bugs-from-real-projects).
 - **Four bugs were invisible to both gates**: toolz `interpose` (every mutant killed, score 100%:
   the bug is a missing `try`/`except`, which no mutation operator can express), tabulate's
   wide-character hang (missing code again) and both semver `next_version` bugs (no survivor on the faulty

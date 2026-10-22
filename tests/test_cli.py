@@ -2,6 +2,7 @@
 
 import datetime as dt
 import json
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -1018,3 +1019,234 @@ def test_command_line_defaults_and_types():
         Path("a.xml"),
         Path("b.xml"),
     ]
+
+
+# ------------------------------------- mutmut survivors, from the per-mutant results
+# tests/fixtures/mutmut is real mutmut 3.8.0 output (see tests/test_mutation.py): 12 killed,
+# 9 survived and 2 "no tests" mutants, 11 of them on lines of src/shop/pricing.py.
+MUTMUT = Path(__file__).parent / "fixtures" / "mutmut"
+SHOP = "src/shop/pricing.py"
+SHOP_SURVIVORS = [
+    (8, "shop.pricing.x_discount__mutmut_1"),
+    (8, "shop.pricing.x_discount__mutmut_2"),
+    (15, "shop.pricing.x_total__mutmut_1"),
+    (20, "shop.pricing.x_scale__mutmut_1"),
+    (25, "shop.pricing.x_unused__mutmut_1"),
+    (25, "shop.pricing.x_unused__mutmut_2"),
+    (34, "shop.pricing.xǁCartǁadd__mutmut_1"),
+    (34, "shop.pricing.xǁCartǁadd__mutmut_3"),
+    (34, "shop.pricing.xǁCartǁadd__mutmut_4"),
+    (36, "shop.pricing.xǁCartǁadd__mutmut_5"),
+    (38, "shop.pricing.xǁCartǁadd__mutmut_6"),
+]
+MUTMUT_GATE = ["mutation", "mutants/mutmut-cicd-stats.json", "--format", "mutmut"]
+
+
+def original_source():
+    return (MUTMUT / "pricing.py.original").read_text(encoding="utf-8")
+
+
+def mutmut_results(root, *, stats=None, subdir=""):
+    """What `mutmut run` and `mutmut export-cicd-stats` leave in mutants/: not committed, as in
+    CI. `stats` replaces the stats file, whose totals are the run's verdict."""
+    base = Path(root, subdir)
+    for name, target in (
+        ("pricing.py.mutated", f"mutants/{SHOP}"),
+        ("pricing.meta", f"mutants/{SHOP}.meta"),
+        ("mutmut-cicd-stats.json", "mutants/mutmut-cicd-stats.json"),
+    ):
+        (base / target).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(MUTMUT / name, base / target)
+    if stats is not None:
+        (base / "mutants/mutmut-cicd-stats.json").write_text(json.dumps(stats))
+
+
+def mutmut_base(repo, source="RATE = 1\n", extra=None):
+    """main holds `source` as the module; a feature branch starts there. Returns main's commit."""
+    repo.commit({SHOP: source, **(extra or {})}, "base")
+    base = repo.git("rev-parse", "HEAD")
+    repo.git("checkout", "-qb", "feature")
+    return base
+
+
+def mutmut_pull_request(repo, *, base_source="RATE = 1\n"):
+    """The pull request puts the source mutmut mutated in place of `base_source`."""
+    base = mutmut_base(repo, base_source)
+    repo.commit({SHOP: original_source()}, "change")
+    return base
+
+
+def warning(line, key):
+    return (
+        f"::warning file={SHOP},line={line}::surviving mutant ({key}): "
+        "no test noticed this change\n"
+    )
+
+
+def listed(line, key):
+    return f"- `{SHOP}:{line}` {key}\n"
+
+
+PASSING = {"killed": 100, "survived": 9, "no_tests": 2}  # 90.09%: the score passes
+HEADER = "#### ✅ Mutation testing: passed\n\n"
+SCORE = "Score **90.09%** (minimum 80%): 100 killed, 0 timed out, 9 survived, 2 not covered.\n\n"
+LIST = "Surviving mutants (tests did not notice these bugs):\n\n"
+
+
+def test_mutmut_survivors_are_annotated_even_when_the_score_passes(repo, capsys):
+    base = mutmut_pull_request(repo)
+    mutmut_results(repo.root, stats=PASSING)
+    assert cli.main([*MUTMUT_GATE, "--base", base]) == 0
+    assert capsys.readouterr().out == (
+        "".join(warning(line, key) for line, key in SHOP_SURVIVORS)
+        + HEADER
+        + SCORE
+        + LIST
+        + "".join(listed(line, key) for line, key in SHOP_SURVIVORS)
+    )
+
+
+def test_mutmut_survivors_are_annotated_when_the_score_fails(repo, capsys):
+    base = mutmut_pull_request(repo)
+    mutmut_results(repo.root)
+    assert cli.main([*MUTMUT_GATE, "--base", base]) == 1
+    out = capsys.readouterr().out
+    assert out.count("::warning ") == 11
+    assert "#### ❌ Mutation testing: failed\n\nScore **52.17%**" in out
+    assert listed(8, "shop.pricing.x_discount__mutmut_1") in out
+
+
+def test_mutmut_survivors_without_a_base_are_all_listed(repo, capsys):
+    mutmut_pull_request(repo)
+    mutmut_results(repo.root, stats=PASSING)
+    assert cli.main(MUTMUT_GATE) == 0
+    assert capsys.readouterr().out.count("::warning ") == 11
+
+
+def test_mutmut_survivors_are_narrowed_to_the_changed_lines(repo, capsys):
+    base = mutmut_pull_request(
+        repo, base_source=original_source().replace("if a > b:", "if a >= b:")
+    )
+    mutmut_results(repo.root, stats=PASSING)
+    assert cli.main([*MUTMUT_GATE, "--base", base]) == 0
+    assert capsys.readouterr().out == (
+        warning(15, "shop.pricing.x_total__mutmut_1")
+        + HEADER
+        + SCORE
+        + LIST
+        + listed(15, "shop.pricing.x_total__mutmut_1")
+    )
+
+
+def test_mutmut_survivors_of_a_function_a_changed_test_names(repo, capsys):
+    head = "from shop.pricing import discount\n\n\ndef test_discount():\n"
+    head += "    assert discount(60) == 10\n"
+    base = mutmut_base(
+        repo, original_source(), {"tests/test_pricing.py": head + "    assert discount(1) == 0\n"}
+    )
+    repo.commit({"tests/test_pricing.py": head}, "weaker")
+    mutmut_results(repo.root, stats=PASSING)
+    assert cli.main([*MUTMUT_GATE, "--base", base, "--preset", "python"]) == 0
+    assert capsys.readouterr().out == (
+        warning(8, "shop.pricing.x_discount__mutmut_1")
+        + warning(8, "shop.pricing.x_discount__mutmut_2")
+        + HEADER
+        + SCORE
+        + LIST
+        + listed(8, "shop.pricing.x_discount__mutmut_1")
+        + listed(8, "shop.pricing.x_discount__mutmut_2")
+    )
+
+
+def test_mutmut_survivors_are_named_not_annotated_when_the_source_moved_on(repo, capsys):
+    base = mutmut_base(repo, original_source())
+    repo.commit({SHOP: original_source().replace("qty >= 50", "qty >= 49")}, "edit after the run")
+    mutmut_results(repo.root, stats=PASSING)
+    assert cli.main([*MUTMUT_GATE, "--base", base]) == 0
+    assert capsys.readouterr().out == (
+        HEADER
+        + SCORE.rstrip("\n")
+        + "\n\nSurviving mutants without a source line (not annotated):\n\n"
+        "- `shop.pricing.x_discount__mutmut_1`\n- `shop.pricing.x_discount__mutmut_2`\n"
+    )
+
+
+def test_mutmut_annotations_name_the_file_from_the_repository_root(repo, capsys, monkeypatch):
+    repo.commit({f"svc/{SHOP}": original_source()}, "service")
+    mutmut_results(repo.root, stats=PASSING, subdir="svc")
+    monkeypatch.chdir(repo.root / "svc")
+    assert cli.main(MUTMUT_GATE) == 0
+    assert f"::warning file=svc/{SHOP},line=8::surviving mutant" in capsys.readouterr().out
+
+
+def test_mutmut_lists_and_annotates_at_most_fifty_survivors(repo, capsys):
+    # The shape mutmut writes, with 51 mutants on one line: they come out in mutmut's order.
+    repo.commit({"pkg/f.py": "def f(x):\n    return x\n"})
+    mutants = ["def x_f__mutmut_orig(x):\n    return x\n"]
+    mutants += [f"def x_f__mutmut_{n}(x):\n    return x + {n}\n" for n in range(1, 52)]
+    codes = {f"pkg.f.x_f__mutmut_{n}": 0 for n in range(1, 52)}
+    repo.write(
+        {
+            "mutants/pkg/f.py": "\n\n".join(mutants),
+            "mutants/pkg/f.py.meta": json.dumps({"exit_code_by_key": codes}),
+            "mutants/mutmut-cicd-stats.json": json.dumps({"killed": 500, "survived": 51}),
+        }
+    )
+    assert cli.main(MUTMUT_GATE) == 0
+    out = capsys.readouterr().out
+    assert out.count("::warning ") == 50
+    assert out.count("\n- `pkg/f.py:2` ") == 50
+    assert "- `pkg/f.py:2` pkg.f.x_f__mutmut_9\n" in out
+    assert "- `pkg/f.py:2` pkg.f.x_f__mutmut_50\n" in out
+    assert "x_f__mutmut_51" not in out
+
+
+@pytest.mark.parametrize(
+    ("stats", "code", "score"),
+    [({"killed": 8, "survived": 2}, 0, "80"), ({"killed": 7, "survived": 3}, 1, "70")],
+)
+def test_mutmut_survivors_that_cannot_be_located_leave_the_verdict_alone(
+    repo, capsys, stats, code, score
+):
+    (repo.root / "stats.json").write_text(json.dumps(stats))
+    assert cli.main(["mutation", "stats.json", "--format", "mutmut"]) == code
+    icon, word = ("✅", "passed") if code == 0 else ("❌", "failed")
+    assert capsys.readouterr().out == (
+        f"#### {icon} Mutation testing: {word}\n\n"
+        f"Score **{score}%** (minimum 80%): {stats['killed']} killed, 0 timed out, "
+        f"{stats['survived']} survived, 0 not covered.\n\n"
+        "Surviving mutants could not be located (the report is not in a mutants/ directory); "
+        "the verdict rests on mutmut's stats file alone.\n"
+    )
+
+
+def test_mutmut_without_survivors_has_nothing_to_locate(repo, capsys):
+    (repo.root / "stats.json").write_text(json.dumps({"killed": 5}))
+    assert cli.main(["mutation", "stats.json", "--format", "mutmut"]) == 0
+    assert capsys.readouterr().out == (
+        "#### ✅ Mutation testing: passed\n\n"
+        "Score **100%** (minimum 80%): 5 killed, 0 timed out, 0 survived, 0 not covered.\n"
+    )
+
+
+@pytest.mark.parametrize("content", ["{", "[]", '{"exit_code_by_key": {"k": "0"}}'])
+def test_a_malformed_mutmut_meta_is_a_note_not_an_error(repo, capsys, content):
+    mutmut_results(repo.root, stats=PASSING)
+    (repo.root / f"mutants/{SHOP}.meta").write_text(content)
+    assert cli.main(MUTMUT_GATE) == 0
+    assert capsys.readouterr().out == (
+        HEADER + SCORE + "Surviving mutants could not be located "
+        "(mutants/src/shop/pricing.py.meta is unreadable or malformed); "
+        "the verdict rests on mutmut's stats file alone.\n"
+    )
+
+
+def test_a_waived_mutmut_failure_still_lists_the_survivors(repo, capsys):
+    expires = dt.datetime.now(dt.UTC).date() + dt.timedelta(days=30)
+    waiver = f'[waivers.mutation]\nreason = "known"\nexpires = {expires}\n'
+    repo.commit({"golden.toml": waiver, SHOP: original_source()})
+    mutmut_results(repo.root)
+    assert cli.main(MUTMUT_GATE) == 0
+    out = capsys.readouterr().out
+    assert "Mutation testing: failed (waived)" in out
+    assert out.count("::warning file=src/shop/pricing.py,line=") == 11

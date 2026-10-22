@@ -137,7 +137,7 @@ Stryker's, applied to all three tools so the number means the same thing everywh
 
 | Language | Tool | How it is scoped |
 |---|---|---|
-| Python | mutmut 3.8 | changed functions and methods → `mutmut run "pkg.mod.x_func__mutmut_*"` |
+| Python | mutmut 3.8 | changed functions and methods → `mutmut run "pkg.mod.x_func__mutmut_*"`; survivors are read from `mutants/` |
 | Node | StrykerJS 10 | changed line ranges → `stryker run --mutate "src/a.ts:10-25,…"` |
 | Go | gremlins 0.6 | whole module, then `golden mutation --base` keeps mutants on changed lines |
 
@@ -156,6 +156,30 @@ Stryker.NET and Stryker4s emit it. Absolute file paths in the report are made re
 **Fixing a failure:** each surviving mutant is annotated on its line with the mutator name. Write
 the assertion that would have failed. For example, a surviving `CONDITIONALS_BOUNDARY` on
 `if qty >= 50` means no test checks quantity 49 *and* 50.
+
+**Survivors on the line.** Every surviving mutant in scope is annotated on its source line and
+listed in the verdict, at most 50, whether or not the score passes. The threshold decides the
+merge; the annotations are for the reviewer. Google's mutation testing works the same way: it
+shows survivors as code-review findings. In the
+[real-fault benchmark](../evals/realfaults/README.md), a mutant survived on the bug's own line
+in 6 of 10 real bugs, and in two of those the score was above 80%.
+
+- **Stryker, mutation-testing-elements and gremlins reports** carry the line.
+- **mutmut's stats file** has totals only. For Python, `golden mutation` also reads what mutmut
+  leaves next to it in `mutants/`, and never runs mutmut again:
+  - The exit code of each mutant, from `<path>.meta`. Survivors are 0; 5 and 33 mean no test
+    reaches the function (`mutmut.stats.status_by_exit_code`).
+  - The mutated module, `mutants/<path>`. The gate finds the first line where a mutant differs
+    from the function's `x_f__mutmut_orig` copy and adds that offset to the function's `def` line
+    in the source.
+  - mutmut has no mutator names, so the label is the mutant key. `mutmut show KEY` prints the
+    change.
+  - The score, and so the verdict, still comes from the stats file.
+- **When a Python survivor can't be placed:**
+  - A line is used only if the `__mutmut_orig` copy matches the working-tree function character
+    for character. If not, the survivor is listed by name and never annotated on a guess.
+  - If the `mutants/` tree is missing, or a `.meta` file is unreadable or malformed, the verdict
+    says the survivors could not be located. This is never an error.
 
 **Arid code.** On some lines no reasonable test should care, such as log messages, debug output
 and help text. Their mutants are noise, not missing assertions. Google found that filtering these
@@ -183,8 +207,8 @@ and help text. Their mutants are noise, not missing assertions. Google found tha
   - `mutation/logic-inside-a-log-call-stays-mutated` must block.
 - **Unreadable source.** If a source file can't be read, nothing is excluded.
 - **Opting out.** `--no-arid-filter` turns the filter off.
-- **mutmut (Python).** mutmut reports only totals, so there is nothing to post-filter. Exclude
-  arid lines when the mutants are generated, with `# pragma: no mutate` or
+- **mutmut (Python).** The built-in filter reads JS/TS and Go lines, so it doesn't apply to
+  mutmut. Exclude arid lines when the mutants are generated, with `# pragma: no mutate` or
   `do_not_mutate_patterns`, anchored as in this repository's `pyproject.toml`.
 - **Anything else:** `// Stryker disable next-line`, or `--exclude-files` for gremlins. Keep the
   list short and commented.

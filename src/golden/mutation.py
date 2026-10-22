@@ -8,7 +8,10 @@ report, because it proves nothing.
 
 Stryker and gremlins reports carry file and line for every mutant, so they can
 be narrowed to the lines a change touched; mutmut is narrowed up front by
-selecting the changed functions.
+selecting the changed functions. Its stats file has totals only, so the surviving
+mutants are read from the per-mutant results mutmut leaves next to it in `mutants/`
+and placed on their source lines (see "mutmut survivors" below). They are shown to
+the reviewer; the score, and so the verdict, still comes from the stats file.
 
 They can also be narrowed to the lines a test should care about. Google found
 developers judged most mutants unproductive until *arid* nodes (logging, debug
@@ -19,11 +22,12 @@ but a logging call are therefore dropped before scoring, and counted.
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 from collections import Counter
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -76,6 +80,11 @@ class Tally:
     invalid: int = 0
     # Mutants in scope dropped before scoring because their line is arid.
     arid: int = 0
+    # mutmut only. Survivors that could not be placed on a source line, by mutant name, and
+    # why the per-mutant results could not be read at all. They explain what is not shown, so
+    # they are no part of the tally's identity.
+    unlocated: tuple[str, ...] = field(default=(), compare=False)
+    locate_failure: str = field(default="", compare=False)
 
     @property
     def valid(self) -> int:
@@ -102,6 +111,21 @@ class Tally:
         if not self.arid:
             return ""
         return f"\n\n{self.arid} mutants excluded as arid (logging/debug output)."
+
+    @property
+    def survivors_note(self) -> str:
+        """Markdown for the gate detail about mutmut survivors that are not annotated."""
+        note = ""
+        if self.locate_failure:
+            note += (
+                f"\n\nSurviving mutants could not be located ({self.locate_failure}); "
+                "the verdict rests on mutmut's stats file alone."
+            )
+        if self.unlocated:
+            note += "\n\nSurviving mutants without a source line (not annotated):\n\n" + "\n".join(
+                f"- `{name}`" for name in self.unlocated[:50]
+            )
+        return note
 
     @classmethod
     def of(cls, mutants: list[Mutant], arid: int = 0) -> Tally:
@@ -164,6 +188,161 @@ def _mutmut(data: dict[str, Any]) -> Tally:
         survived=int(data.get("survived", 0)),
         no_coverage=int(data.get("no_tests", 0)),
     )
+
+
+# ------------------------------------------------------------ mutmut survivors
+# `mutmut export-cicd-stats` writes totals only. Per mutant, mutmut 3.x leaves two things in
+# the `mutants/` directory it ran in. Both are read here, and mutmut is never run again:
+#
+#   mutants/<path>.meta  JSON. `exit_code_by_key` maps each mutant (`pkg.mod.x_f__mutmut_3`, or
+#                        `pkg.mod.xǁClassǁmethod__mutmut_3` for a method) to the exit code of
+#                        its test run.
+#   mutants/<path>       the module with every mutated function written out three ways:
+#                        the trampoline `f`, a verbatim copy `x_f__mutmut_orig`, and
+#                        `x_f__mutmut_<n>`, the same text with exactly one mutation.
+#
+# What the exit codes mean is `mutmut.stats.status_by_exit_code` (mutmut 3.8.0):
+#   0 survived | 1, 3 killed | 5, 33 no tests | 36, 24, -24, 152, 255 timeout | 34 skipped
+#   35 and any code not listed: suspicious | 37 caught by the type checker | 2 interrupted
+#   -9, -11 segfault | null not checked yet
+# 5 is pytest's "no tests collected"; 33 is what `mutmut.__main__._run` writes when no test
+# reaches the function. The score counts "no tests" as not covered, as Stryker counts
+# NoCoverage, and the other formats list those mutants with the survivors, so this does too.
+MUTMUT_LIVED = {0: SURVIVED, 5: NO_COVERAGE, 33: NO_COVERAGE}
+_MUTANT = re.compile(
+    r"(?P<mangled>x(?:_(?P<function>\w+)|ǁ(?P<owner>[^ǁ]+)ǁ(?P<method>\w+)))__mutmut_[0-9]+"
+)
+# A function as the line its `def` is on (not its decorators) and its own lines.
+_Def = tuple[int, list[str]]
+
+
+def _defs(path: Path) -> dict[tuple[str, str], _Def]:
+    """Top-level functions and methods of top-level classes by (class, name): what mutmut
+    mutates. Empty when the file cannot be read or parsed."""
+    lines = _source_lines(str(path))
+    if lines is None:
+        return {}
+    try:
+        tree = ast.parse("\n".join(lines))
+    except (SyntaxError, ValueError):
+        return {}
+    kinds = (ast.FunctionDef, ast.AsyncFunctionDef)
+    scopes = [("", tree.body)]
+    scopes += [(node.name, node.body) for node in tree.body if isinstance(node, ast.ClassDef)]
+    return {
+        (owner, node.name): (node.lineno, lines[node.lineno - 1 : node.end_lineno or node.lineno])
+        for owner, body in scopes
+        for node in body
+        if isinstance(node, kinds)
+    }
+
+
+def _renamed(lines: list[str], old: str, new: str) -> list[str]:
+    """A function's lines with its `def` line spelled with another name."""
+    return [lines[0].replace(old, new, 1), *lines[1:]]
+
+
+def _first_change(
+    key: str, source: dict[tuple[str, str], _Def], mutated: dict[tuple[str, str], _Def]
+) -> int | None:
+    """The source line of the first line a mutant changes, or None when that cannot be told.
+
+    The mutated file holds the function's verbatim copy and the mutant, so the first line on
+    which they differ is the mutation. Its offset from the `def` line, added to the `def` line
+    of the function in `source`, is the line in the file as it is now. That is right only when
+    the copy *is* the source function, character for character. Anything else (the file was
+    edited after the run, the function is not there, the mutant differs by no line) is None:
+    a line is never guessed.
+
+    Limits: a mutation inside a multi-line statement is placed on the line of the changed
+    token, not on the first line of the statement; a mutant that only appends lines is not
+    placed; only top-level functions and methods of top-level classes exist, as for mutmut.
+    """
+    generated = key.rpartition(".")[2]
+    found = _MUTANT.fullmatch(generated)
+    if found is None:
+        return None
+    owner, name = found["owner"] or "", found["function"] or found["method"]
+    orig_name = found["mangled"] + "__mutmut_orig"
+    here = source.get((owner, name))
+    orig = mutated.get((owner, orig_name))
+    mutant = mutated.get((owner, generated))
+    if here is None or orig is None or mutant is None:
+        return None
+    start, current = here
+    original = _renamed(orig[1], orig_name, name)
+    changed = _renamed(mutant[1], generated, name)
+    if original != current:
+        return None
+    for offset, line in enumerate(original):
+        if offset >= len(changed) or line != changed[offset]:
+            return start + offset
+    return None
+
+
+def _exit_codes(meta: Path) -> dict[str, int | None] | None:
+    """`exit_code_by_key` of a mutmut .meta file; None when it is not what mutmut writes."""
+    try:
+        codes = json.loads(meta.read_text(encoding="utf-8"))["exit_code_by_key"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if not isinstance(codes, dict) or not all(c is None or type(c) is int for c in codes.values()):
+        return None
+    return codes
+
+
+def _read_survivors(
+    report: Path, lines: dict[str, list[Range]] | None
+) -> tuple[list[Mutant], list[str]]:
+    """The surviving mutants of a mutmut run within `lines`, as (on a source line, name only).
+
+    mutmut has no mutator names, so a mutant's key stands in for it (`mutmut show KEY` prints
+    the change). Files with no line in `lines` are not read. A mutant that cannot be placed is
+    listed by name when its file is in scope. Raises ValueError, saying why, when the
+    per-mutant results cannot be read: all or nothing, as a partial list would read as complete.
+    """
+    tree = report.absolute().parent
+    if tree.name != "mutants":
+        raise ValueError("the report is not in a mutants/ directory")
+    metas = sorted(tree.rglob("*.py.meta"))
+    if not metas:
+        raise ValueError("mutants/ has no .meta files")
+    placed: list[Mutant] = []
+    named: list[str] = []
+    for meta in metas:
+        file = meta.relative_to(tree).with_suffix("").as_posix()
+        if lines is not None and not lines.get(_relative(file)):
+            continue
+        codes = _exit_codes(meta)
+        if codes is None:
+            raise ValueError(f"mutants/{file}.meta is unreadable or malformed")
+        lived = {key: MUTMUT_LIVED[code] for key, code in codes.items() if code in MUTMUT_LIVED}
+        if not lived:
+            continue
+        source, mutated = _defs(tree.parent / file), _defs(tree / file)
+        for key, status in lived.items():
+            line = _first_change(key, source, mutated)
+            if line is None:
+                named.append(key)
+            else:
+                placed.append(Mutant(file, line, status, key))
+    in_scope = [m for m in placed if lines is None or in_ranges(m, lines)]
+    # Stable: mutants on one line keep mutmut's own order (x_f__mutmut_2 before _10).
+    return sorted(in_scope, key=lambda m: (m.file, m.line)), named
+
+
+def _with_survivors(
+    tally: Tally, report: Path, lines: dict[str, list[Range]] | None
+) -> tuple[Tally, list[Mutant]]:
+    """mutmut's tally with its surviving mutants. The tally, and so the verdict, is the stats
+    file's alone: results that cannot be read only add a note on what is not shown."""
+    try:
+        placed, named = _read_survivors(report, lines)
+    except ValueError as exc:
+        # Worth saying only when the stats file reports something to find.
+        failure = str(exc) if tally.survived + tally.no_coverage else ""
+        return replace(tally, locate_failure=failure), []
+    return replace(tally, unlocated=tuple(named)), placed
 
 
 LINE_PARSERS: dict[str, Callable[[dict[str, Any]], list[Mutant]]] = {
@@ -289,11 +468,14 @@ def evaluate(
 
     Stryker and gremlins mutants on arid lines (see ARID_PATTERNS) are dropped before
     scoring and counted in `Tally.arid`: they are neither detected nor survived.
+
+    For mutmut the tally is the stats file's, and `lines` only narrows the survivors, which
+    come from the per-mutant results in the `mutants/` directory the stats file lives in.
     """
     data = _load(path)
     try:
         if fmt == "mutmut":
-            return _mutmut(data), []
+            return _with_survivors(_mutmut(data), path, lines)
         mutants = LINE_PARSERS[fmt](data)
     except (KeyError, TypeError, ValueError, AttributeError) as exc:
         # Schema drift after a tool upgrade must fail closed, with a readable reason.

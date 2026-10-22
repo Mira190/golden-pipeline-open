@@ -20,6 +20,15 @@ Mutation testing:
   debug call whose arguments only name values. `--no-arid-filter` turns the filter off. A log
   call that wraps another call, or a template interpolation, stays mutated, so logic can't be
   hidden inside a log statement. Two benchmark scenarios check both directions.
+- `golden mutation --format mutmut` annotates surviving mutants on their source lines, as the
+  other formats do, and lists them in the verdict (at most 50), even when the score passes. The
+  stats file has totals only, so it reads the per-mutant results mutmut 3.x leaves in `mutants/`
+  next to it: the exit codes in `<path>.meta`, and the mutated module, where the first line that
+  differs between a function's `__mutmut_orig` copy and the mutant is the change. The line is
+  placed only when that copy is, character for character, the function in the working tree; a
+  survivor that cannot be placed is listed by name and never annotated on a guess. The score, and
+  so the verdict, still comes from the stats file. A missing `mutants/` tree or an unreadable or
+  malformed `.meta` adds a one-line note instead of an error.
 
 Static analysis on the diff:
 

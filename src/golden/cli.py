@@ -304,6 +304,7 @@ def cmd_mutation(args: argparse.Namespace) -> int:
         detail += "\n\nSurviving mutants (tests did not notice these bugs):\n\n" + "\n".join(
             f"- `{m.file}:{m.line}` {m.mutator}" for m in lived[:50]
         )
+    detail += tally.survivors_note
     return verdict(
         "Mutation testing",
         passed=tally.score >= minimum and not tally.unreliable,

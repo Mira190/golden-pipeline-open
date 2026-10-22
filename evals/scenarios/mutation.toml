@@ -267,3 +267,117 @@ expect = "block"
  {"id": "1", "mutatorName": "EqualityOperator", "status": "Survived", "location": {"start": {"line": 3, "column": 29}, "end": {"line": 3, "column": 36}}},
  {"id": "2", "mutatorName": "ConditionalExpression", "status": "Survived", "location": {"start": {"line": 3, "column": 29}, "end": {"line": 3, "column": 36}}}
 ]}}}'''
+
+[[scenario]]
+id = "mutation/mutmut-survivor-annotated-on-passing-score"
+gate = "mutation"
+category = "legit"
+why = "Python: the score passes (6 of 7 mutants killed, 85.71%) but no test covers qty below 10, so the mutant `return 0` -> `return 1` survives on a line the PR added. mutmut's stats file only has totals; the survivor must still reach the reviewer as an annotation on that line (Google shows surviving mutants as code-review findings). The artifacts are real mutmut 3.8.0 output for this change (durations left out)."
+argv = ["mutation", "mutants/mutmut-cicd-stats.json", "--format", "mutmut", "--base", "{base}"]
+expect = "pass"
+stdout_contains = [
+  "::warning file=pkg/pricing.py,line=6::surviving mutant",
+  "- `pkg/pricing.py:6` pkg.pricing.x_bulk_discount__mutmut_7",
+]
+[scenario.base]
+"pkg/pricing.py" = "RATE = 1\n"
+[scenario.head]
+"pkg/pricing.py" = "def bulk_discount(qty):\n    if qty >= 50:\n        return 10\n    if qty >= 10:\n        return 5\n    return 0\n"
+[scenario.artifacts]
+"mutants/mutmut-cicd-stats.json" = '''{
+    "killed": 6,
+    "survived": 1,
+    "total": 7,
+    "no_tests": 0,
+    "skipped": 0,
+    "suspicious": 0,
+    "timeout": 0,
+    "check_was_interrupted_by_user": 0,
+    "segfault": 0
+}'''
+"mutants/pkg/pricing.py.meta" = '''{
+    "exit_code_by_key": {
+        "pkg.pricing.x_bulk_discount__mutmut_1": 1,
+        "pkg.pricing.x_bulk_discount__mutmut_2": 1,
+        "pkg.pricing.x_bulk_discount__mutmut_3": 1,
+        "pkg.pricing.x_bulk_discount__mutmut_4": 1,
+        "pkg.pricing.x_bulk_discount__mutmut_5": 1,
+        "pkg.pricing.x_bulk_discount__mutmut_6": 1,
+        "pkg.pricing.x_bulk_discount__mutmut_7": 0
+    },
+    "hash_by_function_name": {
+        "x_bulk_discount": "2b72f1450891"
+    },
+    "type_check_error_by_key": {},
+    "durations_by_key": {},
+    "estimated_durations_by_key": {}
+}'''
+"mutants/pkg/pricing.py" = '''
+
+
+from mutmut.mutation.trampoline import wrap_in_trampoline as _mutmut_mutated, MutantDict
+mutants_x_bulk_discount__mutmut: MutantDict = {}  # type: ignore
+@_mutmut_mutated(mutants_x_bulk_discount__mutmut)
+def bulk_discount(qty):
+    if qty >= 50:
+        return 10
+    if qty >= 10:
+        return 5
+    return 0
+def x_bulk_discount__mutmut_orig(qty):
+    if qty >= 50:
+        return 10
+    if qty >= 10:
+        return 5
+    return 0
+def x_bulk_discount__mutmut_1(qty):
+    if qty > 50:
+        return 10
+    if qty >= 10:
+        return 5
+    return 0
+def x_bulk_discount__mutmut_2(qty):
+    if qty >= 51:
+        return 10
+    if qty >= 10:
+        return 5
+    return 0
+def x_bulk_discount__mutmut_3(qty):
+    if qty >= 50:
+        return 11
+    if qty >= 10:
+        return 5
+    return 0
+def x_bulk_discount__mutmut_4(qty):
+    if qty >= 50:
+        return 10
+    if qty > 10:
+        return 5
+    return 0
+def x_bulk_discount__mutmut_5(qty):
+    if qty >= 50:
+        return 10
+    if qty >= 11:
+        return 5
+    return 0
+def x_bulk_discount__mutmut_6(qty):
+    if qty >= 50:
+        return 10
+    if qty >= 10:
+        return 6
+    return 0
+def x_bulk_discount__mutmut_7(qty):
+    if qty >= 50:
+        return 10
+    if qty >= 10:
+        return 5
+    return 1
+
+mutants_x_bulk_discount__mutmut['_mutmut_orig'] = x_bulk_discount__mutmut_orig # type: ignore # mutmut generated
+mutants_x_bulk_discount__mutmut['x_bulk_discount__mutmut_1'] = x_bulk_discount__mutmut_1 # type: ignore # mutmut generated
+mutants_x_bulk_discount__mutmut['x_bulk_discount__mutmut_2'] = x_bulk_discount__mutmut_2 # type: ignore # mutmut generated
+mutants_x_bulk_discount__mutmut['x_bulk_discount__mutmut_3'] = x_bulk_discount__mutmut_3 # type: ignore # mutmut generated
+mutants_x_bulk_discount__mutmut['x_bulk_discount__mutmut_4'] = x_bulk_discount__mutmut_4 # type: ignore # mutmut generated
+mutants_x_bulk_discount__mutmut['x_bulk_discount__mutmut_5'] = x_bulk_discount__mutmut_5 # type: ignore # mutmut generated
+mutants_x_bulk_discount__mutmut['x_bulk_discount__mutmut_6'] = x_bulk_discount__mutmut_6 # type: ignore # mutmut generated
+mutants_x_bulk_discount__mutmut['x_bulk_discount__mutmut_7'] = x_bulk_discount__mutmut_7 # type: ignore # mutmut generated'''

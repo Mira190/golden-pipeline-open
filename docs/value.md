@@ -11,18 +11,18 @@ re-run, and the limits of each measurement are stated with it.
 
 | Claim | Measurement | Result | Re-run |
 |---|---|---|---|
-| It makes the right merge decision | [Decision benchmark](#1-the-right-merge-decision): 94 labelled pull requests through the real CLI | 0 escapes, 0 false blocks, 0 crashes; v1.0.0 had 30, 19 and 7 | `uv run python evals/runner.py` |
+| It makes the right merge decision | [Decision benchmark](#1-the-right-merge-decision): 95 labelled pull requests through the real CLI | 0 escapes, 0 false blocks, 0 crashes; v1.0.0 had 30, 20 and 7 | `uv run python evals/runner.py` |
 | It catches weak tests that coverage misses | [Drills](#2-weak-tests-with-real-toolchains): 4 changes × 3 languages, with pytest, Vitest, Go and the mutation tools | Coverage passes the weak test in all three languages; mutation blocks it. 10/10 drills reach the expected decision | `uv run python scripts/drill.py <language>` |
 | It catches real bugs | [Real-fault benchmark](#3-real-bugs-from-real-projects): 10 real bugs from open-source libraries | The full pipeline flags 4, coverage alone 3; a surviving mutant sits on the faulty line in 6 | `uv run python evals/realfaults/run.py` |
-| It doesn't block legitimate work | 37 legitimate pull requests in the benchmark | 0 false blocks; v1.0.0 blocked 19 | as above |
+| It doesn't block legitimate work | 38 legitimate pull requests in the benchmark | 0 false blocks; v1.0.0 got 20 wrong | as above |
 | It holds against people who want to get round it | 41 gaming attempts in the benchmark | 0 escapes; v1.0.0 let 30 through | as above |
 | It fails closed | 16 corrupt or malformed inputs | 0 crashes, 0 silent passes | as above |
 
 ## 1. The right merge decision
 
-The [decision benchmark](../evals/README.md) holds 94 labelled pull requests:
+The [decision benchmark](../evals/README.md) holds 95 labelled pull requests:
 
-- **37 legitimate changes** the gates must let through.
+- **38 legitimate changes** the gates must let through or handle correctly.
 - **41 attempts to get round a gate.** For example: no tests, assertion-free tests, a pull request
   that lowers its own threshold or waives itself, a scorecard control met by a comment.
 - **16 broken inputs** the gates must refuse with a message, not crash on or wave through.
@@ -32,16 +32,16 @@ same scenarios run against the initial release and against the current code:
 
 | | Correct | Escapes | False blocks | Robustness failures | Crashes | Known gaps |
 |---|---|---|---|---|---|---|
-| v1.0.0 (initial release) | 31 / 94 | **30** | **19** | 13 | 7 | 1 |
-| Current | 93 / 94 | 0 | 0 | 0 | 0 | 1 |
+| v1.0.0 (initial release) | 31 / 95 | **30** | **20** | 13 | 7 | 1 |
+| Current | 94 / 95 | 0 | 0 | 0 | 0 | 1 |
 
-v1.0.0's 62 wrong decisions fall into two groups, and the split matters for what the number
+v1.0.0's 63 wrong decisions fall into two groups, and the split matters for what the number
 proves:
 
 | | Escapes | False blocks | Robustness (incl. crashes) | Total |
 |---|---|---|---|---|
 | **Defects in controls v1.0.0 already had** | 19 | 13 | 13 | **45** |
-| Controls v1.0.0 did not have | 11 | 6 | 0 | 17 |
+| Controls v1.0.0 did not have | 11 | 7 | 0 | 18 |
 
 The 45 are the measure of the method's value. They are bugs in gates that had unit tests,
 99% branch coverage and an 80% mutation score. Examples:
@@ -52,7 +52,7 @@ The 45 are the measure of the method's value. They are bugs in gates that had un
 - A scorecard control was met by `# TODO: container.yml`.
 
 Unit tests ask whether the code does what its author meant. Only scenario-level ground truth
-asks whether the merge decision is right. The 17 are new controls, each written test-first
+asks whether the merge decision is right. The 18 are new controls, each written test-first
 against a scenario that failed on the old code:
 
 - Test-only weakening.
@@ -61,6 +61,7 @@ against a scenario that failed on the old code:
 - Owned OSV exceptions.
 - Caller-disabled gates.
 - The arid-line filter.
+- Python surviving mutants shown on their line.
 
 The one known gap is reported and tested as a strict expected failure.
 `presence/python-string-mention`: a module name in an unrelated string still counts as a
@@ -153,8 +154,9 @@ bug lived?
     the line, more than as a pass/fail score.
   - The benchmark also showed that `golden mutation` did not surface Python survivors at all. It
     read only mutmut's totals.
-  - Showing them on the line, as the gate already does for TypeScript and Go, is the change
-    this finding calls for.
+  - The gate now shows them on the line, as it already did for TypeScript and Go. It reads
+    mutmut's per-mutant results and never guesses a line. The benchmark scenario
+    `mutation/mutmut-survivor-annotated-on-passing-score` checks it.
 - **Four bugs are out of reach for both gates.** Two needed code that wasn't there, a missing
   `try`/`except` and a missing guard against a hang, and no mutation operator writes missing
   code. In the two semver bugs every mutant on the faulty line was killed, yet an ordering
@@ -177,7 +179,7 @@ differ.
 
 | What | Time | Note |
 |---|---|---|
-| Decision benchmark, 94 scenarios | 54 s | Runs on every change as part of `pytest`. |
+| Decision benchmark, 95 scenarios | 54 s | Runs on every change as part of `pytest`. |
 | Python drill, 4 changes | 2 min 30 s | pytest, coverage.py and mutmut, including tool start-up. |
 | TypeScript drill, 3 changes | 64 s | Vitest and StrykerJS. |
 | Go drill, 3 changes | 58 s | `go test` and gremlins. |
@@ -189,7 +191,7 @@ L4 scorecard controls added 10 functions, and the gate had 185 mutants to run.
 **Developer time.** The cost a gate imposes on a team is mostly its false blocks: each one is a
 dispute, a waiver request or a weakened test.
 
-- The benchmark's 37 legitimate pull requests produce 0 false blocks. v1.0.0 blocked 19 of them,
+- The benchmark's 38 legitimate pull requests produce 0 false blocks. v1.0.0 got 20 of them wrong,
   including Django's `tests.py`, relative imports and Angular file names.
 - The one known gap errs on the permissive side and leaves the backstop to mutation testing.
 

@@ -1,0 +1,11 @@
+{
+    "killed": 12,
+    "survived": 9,
+    "total": 23,
+    "no_tests": 2,
+    "skipped": 0,
+    "suspicious": 0,
+    "timeout": 0,
+    "check_was_interrupted_by_user": 0,
+    "segfault": 0
+}

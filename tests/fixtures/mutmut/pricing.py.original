@@ -1,0 +1,50 @@
+"""Pricing."""
+
+LIMIT = 10
+
+
+def discount(qty):
+    """Bulk discount."""
+    if qty >= 50:
+        return 10
+    return 0
+
+
+def total(a, b):
+    # keep the bigger one
+    if a > b:
+        return a
+    return b
+
+
+def scale(value, factor=2):
+    return value * factor
+
+
+def unused(x):
+    return x + 1
+
+
+class Cart:
+    def __init__(self):
+        self.items = []
+
+    def add(self, name,
+            price):
+        label = "item:" + name
+        self.items.append(
+            (label,
+             price,
+             1)
+        )
+        return len(self.items)
+
+    @staticmethod
+    def tax(x):
+        return x * 2
+
+
+async def fetch(n):
+    def inner(k):
+        return k + 1
+    return inner(n) + 1
