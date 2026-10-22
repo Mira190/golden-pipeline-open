@@ -168,8 +168,7 @@ expect_lines = ["pkg.mod.x_first__mutmut_*"]
 id = "mutation-targets/test-only-weakening"
 gate = "mutation-targets"
 category = "gaming"
-why = "The PR only deletes assertions from an existing test. No source line changes, so diff coverage, test presence and diff-scoped mutation all have nothing to check, and coverage does not move."
-known_gap = "Every diff gate keys on changed source. Mitigation in docs/redteam/2026-10-22-review.md (R5): mutate the functions a changed test covers, or a scheduled full mutation run with a score ratchet."
+why = "The PR only deletes assertions from an existing test. No source line changes, so diff coverage and test presence have nothing to check and coverage does not move; the functions the edited test lines name must be mutated."
 argv = ["changed", "--base", "{base}", "--preset", "python", "--kind", "mutation-targets", "--sep", "newline"]
 expect_lines = ["pkg.mod.x_rate__mutmut_*"]
 [scenario.base]
@@ -177,3 +176,59 @@ expect_lines = ["pkg.mod.x_rate__mutmut_*"]
 "tests/test_mod.py" = "from pkg.mod import rate\n\n\ndef test_rate():\n    assert rate(11) == 2\n    assert rate(10) == 1\n"
 [scenario.head]
 "tests/test_mod.py" = "from pkg.mod import rate\n\n\ndef test_rate():\n    rate(11)\n"
+
+[[scenario]]
+id = "mutation-targets/test-file-deleted"
+gate = "mutation-targets"
+category = "gaming"
+why = "The PR deletes a whole test file. Its removed lines still name the functions it tested, so those functions are mutated."
+argv = ["changed", "--base", "{base}", "--preset", "python", "--kind", "mutation-targets", "--sep", "newline"]
+expect_lines = ["pkg.mod.x_rate__mutmut_*"]
+delete = ["tests/test_mod.py"]
+[scenario.base]
+"pkg/mod.py" = "def rate(q):\n    return 2 if q > 10 else 1\n"
+"tests/test_mod.py" = "from pkg.mod import rate\n\n\ndef test_rate():\n    assert rate(11) == 2\n"
+
+[[scenario]]
+id = "mutation-targets/test-edit-scopes-to-named-functions"
+gate = "mutation-targets"
+category = "legit"
+why = "A test edit that names one function must not pull every function of the module into mutation testing."
+argv = ["changed", "--base", "{base}", "--preset", "python", "--kind", "mutation-targets", "--sep", "newline"]
+expect_lines = ["pkg.mod.x_rate__mutmut_*"]
+[scenario.base]
+"pkg/mod.py" = "def rate(q):\n    return 2 if q > 10 else 1\n\n\ndef fee():\n    return 1\n\n\ndef tax():\n    return 0\n"
+"tests/test_mod.py" = "from pkg.mod import fee, rate\n\n\ndef test_rate():\n    assert rate(11) == 2\n\n\ndef test_fee():\n    assert fee() == 1\n"
+[scenario.head]
+"tests/test_mod.py" = "from pkg.mod import fee, rate\n\n\ndef test_rate():\n    assert rate(11) == 2\n    assert rate(10) == 1\n\n\ndef test_fee():\n    assert fee() == 1\n"
+
+[[scenario]]
+id = "mutation-targets/node-test-weakening"
+gate = "mutation-targets"
+category = "gaming"
+why = "TypeScript: an assertion removed from pricing.test.ts puts bulkDiscount's line range back into Stryker's --mutate scope."
+argv = ["changed", "--base", "{base}", "--preset", "node", "--kind", "mutation-targets", "--sep", "newline"]
+expect_lines = ["src/pricing.ts:3-6"]
+[scenario.base]
+"src/pricing.ts" = "export const RATE = 1;\n\nexport function bulkDiscount(q: number): number {\n  if (q >= 10) return 5;\n  return 0;\n}\n"
+"src/pricing.test.ts" = "import { expect, it } from \"vitest\";\nimport { bulkDiscount } from \"./pricing\";\n\nit(\"tiers\", () => {\n  expect(bulkDiscount(10)).toBe(5);\n  expect(bulkDiscount(9)).toBe(0);\n});\n"
+[scenario.head]
+"src/pricing.test.ts" = "import { expect, it } from \"vitest\";\nimport { bulkDiscount } from \"./pricing\";\n\nit(\"tiers\", () => {\n  bulkDiscount(10);\n});\n"
+
+[[scenario]]
+id = "mutation/go-test-weakening-blocks"
+gate = "mutation"
+category = "gaming"
+why = "Go: the PR only weakens Rate's test. The gremlins survivor inside Rate is not on a changed line, but Rate is what the edited test names."
+argv = ["mutation", "gremlins.json", "--format", "gremlins", "--base", "{base}", "--preset", "go"]
+expect = "block"
+[scenario.base]
+"pricing/pricing.go" = "package pricing\n\nfunc Rate(q int) int {\n\tif q > 10 {\n\t\treturn 2\n\t}\n\treturn 1\n}\n"
+"pricing/pricing_test.go" = "package pricing\n\nimport \"testing\"\n\nfunc TestRate(t *testing.T) {\n\tif Rate(11) != 2 {\n\t\tt.Fatal()\n\t}\n}\n"
+[scenario.head]
+"pricing/pricing_test.go" = "package pricing\n\nimport \"testing\"\n\nfunc TestRate(t *testing.T) {\n\t_ = Rate(11)\n}\n"
+[scenario.artifacts]
+"gremlins.json" = '''{"files": [{"file_name": "pricing/pricing.go", "mutations": [
+ {"line": 4, "column": 7, "type": "CONDITIONALS_BOUNDARY", "status": "LIVED"},
+ {"line": 4, "column": 7, "type": "CONDITIONALS_NEGATION", "status": "LIVED"}
+]}]}'''

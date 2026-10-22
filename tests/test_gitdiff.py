@@ -91,3 +91,47 @@ def test_git_failure_raises_git_error(repo):
 )
 def test_unquote(quoted, plain):
     assert gitdiff._unquote(quoted) == plain
+
+
+def test_changed_text_has_added_and_removed_lines_and_deleted_files(repo):
+    repo.commit({"t.py": "keep\nassert a(1)\nassert b(2)\n", "gone.py": "assert c(3)\n"})
+    base = repo.git("rev-parse", "HEAD")
+    repo.git("rm", "-q", "gone.py")
+    repo.commit({"t.py": "keep\nb(2)\n", "new.py": "++ x\n"})
+    assert gitdiff.changed_text(base) == {
+        "t.py": "assert a(1)\nassert b(2)\nb(2)",
+        "gone.py": "assert c(3)",
+        "new.py": "++ x",
+    }
+    # changed_lines ignores the deletion and the removed lines.
+    assert gitdiff.changed_lines(base) == {"t.py": [(2, 2)], "new.py": [(1, 1)]}
+
+
+def test_changed_text_of_unusual_names(repo):
+    repo.commit({"my test.py": "a\n", "tést.py": "b\n"})
+    base = repo.git("rev-parse", "HEAD")
+    repo.git("rm", "-q", "my test.py", "tést.py")
+    repo.git("commit", "-qm", "rm")
+    assert gitdiff.changed_text(base) == {"my test.py": "a", "tést.py": "b"}
+
+
+def test_tracked_files_are_relative_to_cwd(repo, monkeypatch):
+    repo.commit({"svc/a.py": "a", "svc/pkg/b.py": "b", "other/c.py": "c"})
+    repo.write({"svc/untracked.py": "u"})
+    monkeypatch.chdir(repo.root / "svc")
+    assert gitdiff.tracked_files() == ["a.py", "pkg/b.py"]
+
+
+def test_changed_anywhere_sees_the_whole_repository(repo, monkeypatch):
+    repo.commit({".github/workflows/ci.yml": "x", "svc/golden.toml": "", "CODEOWNERS": "*"})
+    base = repo.git("rev-parse", "HEAD")
+    repo.git("rm", "-q", "CODEOWNERS")
+    repo.commit({".github/workflows/ci.yml": "y", "svc/golden.toml": "[a]", "svc/x.py": "1"})
+    monkeypatch.chdir(repo.root / "svc")
+    specs = [".github/workflows", "CODEOWNERS", "svc/golden.toml", "golden.toml"]
+    assert gitdiff.changed_anywhere(base, specs) == [
+        ".github/workflows/ci.yml",
+        "CODEOWNERS",
+        "svc/golden.toml",
+    ]
+    assert gitdiff.changed_anywhere(base, ["*.py"]) == []  # literal, not a glob

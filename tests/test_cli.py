@@ -588,3 +588,57 @@ def test_scorecard_json_and_verdict_are_exact(repo, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "#### ⚠️ Scorecard: failed (waived)\n\nLevel 0 (minimum 2)." in out
     assert f"::warning::scorecard is waived until {expires}: new repo" in out
+
+
+def test_plan_flags_changes_to_what_gates_the_change(repo, monkeypatch, capsys):
+    repo.commit({".github/workflows/ci.yml": "on: pull_request\n", "a.py": "x = 1\n"})
+    pull_request(repo, monkeypatch, repo.git("rev-parse", "HEAD"))
+    repo.commit({".github/workflows/ci.yml": "on: push\n", "golden.toml": "[mutation]\n"})
+    out_file = repo.root / "out"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out_file))
+    assert cli.main(["plan", "--language", "python"]) == 0
+    out = capsys.readouterr().out
+    for path in (".github/workflows/ci.yml", "golden.toml"):
+        assert f"::warning file={path}::This pull request changes how it is itself gated." in out
+    assert "| gating-changes | `.github/workflows/ci.yml golden.toml` |" in out
+    assert "gating-changes=.github/workflows/ci.yml golden.toml\n" in out_file.read_text()
+
+
+def test_plan_without_gating_changes_warns_nothing(repo, monkeypatch, capsys):
+    repo.commit({"a.py": "x = 1\n"})
+    pull_request(repo, monkeypatch, repo.git("rev-parse", "HEAD"))
+    repo.commit({"a.py": "x = 2\n"})
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    assert cli.main(["plan", "--language", "python"]) == 0
+    out = capsys.readouterr().out
+    assert "::warning" not in out
+    assert json.loads(out)["gating-changes"] == ""
+
+
+GO_SRC = "package p\n\nfunc Rate(q int) int {\n\tif q > 10 {\n\t\treturn 2\n\t}\n\treturn 1\n}\n"
+GO_TEST = (
+    "package p\n\nfunc TestRate(t *testing.T) {\n\tif Rate(11) != 2 {\n\t\tt.Fatal()\n\t}\n}\n"
+)
+
+
+def test_mutation_counts_test_touched_functions_with_preset(repo, capsys):
+    repo.commit({"p/p.go": GO_SRC, "p/p_test.go": GO_TEST})
+    base = repo.git("rev-parse", "HEAD")
+    repo.commit(
+        {
+            "p/p_test.go": GO_TEST.replace(
+                "\tif Rate(11) != 2 {\n\t\tt.Fatal()\n\t}\n", "\t_ = Rate(11)\n"
+            )
+        }
+    )
+    report = {
+        "files": [
+            {"file_name": "p/p.go", "mutations": [{"line": 4, "type": "CB", "status": "LIVED"}]}
+        ]
+    }
+    (repo.root / "g.json").write_text(json.dumps(report))
+    argv = ["mutation", "g.json", "--format", "gremlins", "--base", base]
+    assert cli.main(argv) == 0  # changed lines only: the source did not change
+    assert "no mutants in the changed code" in capsys.readouterr().out
+    assert cli.main([*argv, "--preset", "go"]) == 1
+    assert "- `p/p.go:4` CB" in capsys.readouterr().out

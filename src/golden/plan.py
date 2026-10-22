@@ -9,13 +9,14 @@ from __future__ import annotations
 
 import json
 import os
+import posixpath
 import re
 import secrets
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from golden import gitdiff, presets
+from golden import gitdiff, impact, presets
 from golden.config import Policy
 from golden.globmatch import match_any
 
@@ -151,6 +152,19 @@ def commands(language: str, inputs: dict[str, Any], root: Path) -> dict[str, str
     return effective
 
 
+def mutation_targets(preset: presets.Preset, base: str, exempt: tuple[str, ...]) -> list[str]:
+    """Mutation-tool selectors for the changed source lines and the test-touched functions."""
+    lines = impact.mutation_lines(base, preset, exempt)
+    return sorted(
+        {
+            target
+            for path, ranges in lines.items()
+            if preset.is_source(path) and not match_any(path, exempt)
+            for target in preset.mutation_targets(path, ranges, gitdiff.read_head(path))
+        }
+    )
+
+
 def changes(language: str, base: str, policy: Policy) -> dict[str, str]:
     """Changed tests, test packages and mutation targets relative to `base`."""
     if not base:
@@ -161,15 +175,7 @@ def changes(language: str, base: str, policy: Policy) -> dict[str, str]:
     # Only files a test runner can execute: pytest on a conftest.py or vitest on a
     # fixture finds no tests and fails, which would block a legitimate change.
     tests = [p for p in changed if preset.is_runnable_test(p)]
-    lines = gitdiff.changed_lines(base)
-    targets = sorted(
-        {
-            t
-            for p in sources
-            if p in lines
-            for t in preset.mutation_targets(p, lines[p], gitdiff.read_head(p))
-        }
-    )
+    targets = mutation_targets(preset, base, policy.exempt)
     packages = sorted({f"./{PurePosixPath(t).parent}" for t in tests})
     return {
         "tests": " ".join(tests),
@@ -183,6 +189,25 @@ def slug(working_directory: str) -> str:
     """A name-safe identifier for the project directory (artifact and cache keys)."""
     cleaned = re.sub(r"[^A-Za-z0-9]+", "-", working_directory.strip("./")).strip("-")
     return cleaned or "root"
+
+
+# Files that decide how a change is gated, relative to the repository root.
+GATING_FILES = (".github/workflows", ".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS")
+GATING_WARNING = (
+    "This pull request changes how it is itself gated. GitHub runs the pull request's own copy "
+    "of a workflow, so a code owner must review this file; golden.toml loosening applies only "
+    "after merge."
+)
+
+
+def gating_changes(base: str, policy_path: Path) -> list[str]:
+    """Workflows, CODEOWNERS and the policy file this change modifies (repository paths)."""
+    if not base:
+        return []
+    policy = posixpath.normpath(
+        posixpath.join(gitdiff.repo_prefix(), Path(os.path.relpath(policy_path)).as_posix())
+    )
+    return gitdiff.changed_anywhere(base, [*GATING_FILES, policy])
 
 
 def build(
@@ -223,6 +248,7 @@ def render(language: str, outputs: dict[str, str]) -> str:
         "test-command",
         "tests",
         "mutate",
+        "gating-changes",
     )
     rows = [
         f"| {k} | `{outputs[k].replace('|', '\\|').replace(chr(10), ' ⏎ ')}` |"

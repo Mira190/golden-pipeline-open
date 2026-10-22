@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -243,6 +244,7 @@ def test_render_escapes_pipes():
             "test-command",
             "tests",
             "mutate",
+            "gating-changes",
         ),
         "",
     )
@@ -289,3 +291,35 @@ def test_flake_gate_only_reruns_runnable_tests(repo, language, files, tests):
     base = repo.git("rev-parse", "HEAD")
     repo.commit(dict.fromkeys(files, "x\n"))
     assert plan.changes(language, base, POLICY)["tests"] == tests
+
+
+def test_mutation_targets_include_functions_a_test_only_change_touches(repo):
+    mod = "def rate(q):\n    return 2 if q > 10 else 1\n\n\ndef fee():\n    return 1\n"
+    test = "from pkg.mod import rate\n\n\ndef test_rate():\n    assert rate(11) == 2\n"
+    repo.commit({"pkg/mod.py": mod, "tests/test_mod.py": test})
+    base = repo.git("rev-parse", "HEAD")
+    repo.commit({"tests/test_mod.py": test.replace("assert rate(11) == 2", "rate(11)")})
+    assert plan.mutation_targets(plan.presets.get("python"), base, ()) == [
+        "pkg.mod.x_rate__mutmut_*"
+    ]
+    assert plan.changes("python", base, POLICY)["mutate"] == "pkg.mod.x_rate__mutmut_*"
+    assert plan.changes("python", base, POLICY)["sources-changed"] == "false"
+
+
+def test_gating_changes(repo, monkeypatch):
+    repo.commit({".github/workflows/ci.yml": "a", "svc/golden.toml": "", "svc/a.py": "x"})
+    base = repo.git("rev-parse", "HEAD")
+    assert plan.gating_changes(base, Path("golden.toml")) == []
+    repo.commit(
+        {".github/workflows/ci.yml": "b", "svc/golden.toml": "[coverage]", "golden.toml": ""}
+    )
+    monkeypatch.chdir(repo.root / "svc")
+    assert plan.gating_changes(base, Path("golden.toml")) == [
+        ".github/workflows/ci.yml",
+        "svc/golden.toml",
+    ]
+    assert plan.gating_changes(base, Path("../golden.toml")) == [
+        ".github/workflows/ci.yml",
+        "golden.toml",
+    ]
+    assert plan.gating_changes("", Path("golden.toml")) == []

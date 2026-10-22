@@ -11,6 +11,7 @@ import io
 import re
 import tokenize
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import PurePosixPath
 
 from golden.globmatch import match_any
@@ -52,17 +53,66 @@ class Preset:
         """Mutation-tool selectors covering only the changed lines of `source`."""
         raise NotImplementedError
 
+    def function_ranges(self, text: str) -> dict[str, list[Range]]:
+        """Line ranges of the functions and methods a source file defines, by name."""
+        raise NotImplementedError
+
+
+def _span(node: ast.stmt) -> Range:
+    start = min([node.lineno, *(d.lineno for d in getattr(node, "decorator_list", []))])
+    return start, node.end_lineno or node.lineno
+
 
 def _overlaps(node: ast.stmt, ranges: list[Range]) -> bool:
-    start = min([node.lineno, *(d.lineno for d in getattr(node, "decorator_list", []))])
-    end = node.end_lineno or node.lineno
+    start, end = _span(node)
     return any(lo <= end and hi >= start for lo, hi in ranges)
+
+
+Function = ast.FunctionDef | ast.AsyncFunctionDef
+
+
+def _functions(tree: ast.Module) -> list[tuple[str, Function]]:
+    """Top-level functions and class methods: what mutmut mutates, with their class."""
+    kinds = (ast.FunctionDef, ast.AsyncFunctionDef)
+    found: list[tuple[str, Function]] = []
+    for node in tree.body:
+        if isinstance(node, kinds):
+            found.append(("", node))
+        elif isinstance(node, ast.ClassDef):
+            found.extend((node.name, item) for item in node.body if isinstance(item, kinds))
+    return found
+
+
+# A JS/TS function declaration, a function-valued const, or a class method header.
+JS_FUNCTION = re.compile(
+    r"^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)"
+    r"|^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?="
+    r"\s*(?:async\s+)?(?:function\b|\(|[A-Za-z_$][\w$]*\s*=>)"
+    r"|^\s+(?:(?:public|private|protected|static|async|readonly|override)\s+)*"
+    r"([A-Za-z_$][\w$]*)\s*(?:<[^>]*>)?\([^;]*\)\s*(?::[^{;]+)?\{\s*$"
+)
+JS_NOT_METHODS = {"if", "for", "while", "switch", "catch", "with", "return", "function"}
+JS_LITERALS = re.compile(r"//.*$|\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`")
+GO_FUNCTION = re.compile(r"^func\s+(?:\([^)]*\)\s*)?([A-Za-z_]\w*)")
+
+
+def _brace_end(lines: list[str], start: int) -> int:
+    """Index of the line closing the block that opens at `lines[start]` (0-based)."""
+    depth, opened = 0, False
+    for i in range(start, len(lines)):
+        code = JS_LITERALS.sub("", lines[i])
+        depth += code.count("{") - code.count("}")
+        opened = opened or "{" in code
+        if (opened and depth <= 0) or (not opened and code.rstrip().endswith(";")):
+            return i
+    return start
 
 
 def _word(name: str) -> re.Pattern[str]:
     return re.compile(rf"(?<![\w.]){re.escape(name)}(?!\w)")
 
 
+@lru_cache(maxsize=256)
 def _without_comments(text: str) -> str:
     """Python source minus comments: mentioning a module in a comment does not test it."""
     lines = text.splitlines(keepends=True)
@@ -77,6 +127,20 @@ def _without_comments(text: str) -> str:
     return "".join(lines)
 
 
+@lru_cache(maxsize=256)
+def _relative_import_nodes(text: str) -> tuple[tuple[int, str, tuple[str, ...]], ...]:
+    """`from .x import a, b` statements as (level, "x", ("a", "b")); parsed once per text."""
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return ()
+    return tuple(
+        (node.level, node.module or "", tuple(alias.name for alias in node.names))
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.level
+    )
+
+
 class PythonPreset(Preset):
     @staticmethod
     def module(source: str) -> str:
@@ -89,20 +153,16 @@ class PythonPreset(Preset):
 
     def relative_imports(self, test: str, test_text: str) -> set[str]:
         """Modules a test reaches with `from .x import y` / `from .. import x`."""
-        try:
-            tree = ast.parse(test_text)
-        except SyntaxError:
-            return set()
         package = self.module(test).split(".")
         if PurePosixPath(test).name != "__init__.py":
             package = package[:-1]
         found = set()
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom) and 0 < node.level <= len(package) + 1:
-                anchor = package[: len(package) - (node.level - 1)]
-                target = ".".join([*anchor, *([node.module] if node.module else [])])
+        for level, module, names in _relative_import_nodes(test_text):
+            if level <= len(package) + 1:
+                anchor = package[: len(package) - (level - 1)]
+                target = ".".join([*anchor, *([module] if module else [])])
                 found.add(target)
-                found.update(f"{target}.{alias.name}" for alias in node.names)
+                found.update(f"{target}.{name}" for name in names)
         return found
 
     def references(self, source: str, test: str, test_text: str) -> bool:
@@ -123,18 +183,23 @@ class PythonPreset(Preset):
             tree = ast.parse(text)
         except SyntaxError:
             return [f"{module}.x*"]
-        functions = (ast.FunctionDef, ast.AsyncFunctionDef)
-        targets = []
-        for node in tree.body:
-            if isinstance(node, functions) and _overlaps(node, ranges):
-                targets.append(f"{module}.x_{node.name}__mutmut_*")
-            elif isinstance(node, ast.ClassDef):
-                targets.extend(
-                    f"{module}.xǁ{node.name}ǁ{item.name}__mutmut_*"
-                    for item in node.body
-                    if isinstance(item, functions) and _overlaps(item, ranges)
-                )
-        return targets
+        return [
+            f"{module}.xǁ{owner}ǁ{node.name}__mutmut_*"
+            if owner
+            else f"{module}.x_{node.name}__mutmut_*"
+            for owner, node in _functions(tree)
+            if _overlaps(node, ranges)
+        ]
+
+    def function_ranges(self, text: str) -> dict[str, list[Range]]:
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            return {}
+        found: dict[str, list[Range]] = {}
+        for _, node in _functions(tree):
+            found.setdefault(node.name, []).append(_span(node))
+        return found
 
 
 class NodePreset(Preset):
@@ -155,6 +220,17 @@ class NodePreset(Preset):
         # StrykerJS `--mutate` accepts `path:start-end` line ranges.
         return [f"{source}:{lo}-{hi}" for lo, hi in ranges]
 
+    def function_ranges(self, text: str) -> dict[str, list[Range]]:
+        # A formatter-shaped approximation (Biome/Prettier layout), not a parser.
+        lines = text.splitlines()
+        found: dict[str, list[Range]] = {}
+        for i, line in enumerate(lines):
+            m = JS_FUNCTION.match(line)
+            name = m and next(g for g in m.groups() if g)
+            if name and name not in JS_NOT_METHODS:
+                found.setdefault(name, []).append((i + 1, _brace_end(lines, i) + 1))
+        return found
+
 
 class GoPreset(Preset):
     def references(self, source: str, test: str, test_text: str) -> bool:
@@ -165,6 +241,19 @@ class GoPreset(Preset):
         # gremlins scopes itself with `--diff`; report the package for visibility.
         parent = PurePosixPath(source).parent
         return ["./" if str(parent) == "." else f"./{parent}"]
+
+    def function_ranges(self, text: str) -> dict[str, list[Range]]:
+        # gofmt puts a top-level function's closing brace alone at column 0.
+        lines = text.splitlines()
+        found: dict[str, list[Range]] = {}
+        for i, line in enumerate(lines):
+            if m := GO_FUNCTION.match(line):
+                one_line = line.rstrip().endswith("}")
+                end = (
+                    i if one_line else next((j for j in range(i, len(lines)) if lines[j] == "}"), i)
+                )
+                found.setdefault(m[1], []).append((i + 1, end + 1))
+        return found
 
 
 PRESETS: dict[str, Preset] = {

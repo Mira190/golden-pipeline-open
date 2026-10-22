@@ -83,3 +83,18 @@ expect = "error"
 [scenario.artifacts]
 "../deploys.jsonl" = '''{"sha": "a", "committed_at": "2026-10-01T08:00:00", "deployed_at": "2026-10-01T10:00:00+00:00", "failed": false, "restored_at": null}
 '''
+
+[[scenario]]
+id = "plan/flags-a-change-to-its-own-workflow"
+gate = "plan"
+category = "gaming"
+why = "The PR edits the caller workflow that gates it (GitHub runs the PR's copy). The plan must say so on the file, for every reviewer to see."
+argv = ["plan", "--language", "python"]
+inputs = {}
+expect = "pass"
+stdout_contains = ["::warning file=.github/workflows/ci.yml::This pull request changes how it is itself gated."]
+[scenario.base]
+".github/workflows/ci.yml" = "on: pull_request\njobs: {}\n"
+"app.py" = "X = 1\n"
+[scenario.head]
+".github/workflows/ci.yml" = "on: pull_request\njobs:\n  ci:\n    with:\n      mutation: false\n"

@@ -22,6 +22,7 @@ from golden import (
     coverage,
     dora,
     gitdiff,
+    impact,
     local,
     mutation,
     plan,
@@ -74,6 +75,10 @@ def cmd_policy(args: argparse.Namespace) -> int:
 def cmd_plan(args: argparse.Namespace) -> int:
     inputs = json.loads(os.environ.get("GOLDEN_INPUTS") or "{}")
     outputs = plan.build(args.language, inputs, plan.Event.from_env(), _policy(args), Path())
+    gating = plan.gating_changes(outputs["base"], args.policy)
+    for path in gating:
+        annotate("warning", plan.GATING_WARNING, file=path)
+    outputs["gating-changes"] = " ".join(gating)
     target = os.environ.get("GITHUB_OUTPUT")
     if target:
         plan.write_outputs(outputs, Path(target))
@@ -94,15 +99,7 @@ def cmd_changed(args: argparse.Namespace) -> int:
     elif args.kind == "sources":
         selected = sources
     else:
-        lines = gitdiff.changed_lines(args.base)
-        selected = sorted(
-            {
-                target
-                for p in sources
-                if p in lines
-                for target in preset.mutation_targets(p, lines[p], gitdiff.read_head(p))
-            }
-        )
+        selected = plan.mutation_targets(preset, args.base, policy.exempt)
     print({"space": " ", "newline": "\n", "comma": ","}[args.sep].join(selected))
     return 0
 
@@ -241,7 +238,13 @@ def cmd_ratchet(args: argparse.Namespace) -> int:
 def cmd_mutation(args: argparse.Namespace) -> int:
     policy = _policy(args)
     minimum = policy.get("mutation.min_score")
-    lines = gitdiff.changed_lines(args.base) if args.base else None
+    lines = None
+    if args.base:
+        lines = (
+            impact.mutation_lines(args.base, presets.get(args.preset), policy.exempt)
+            if args.preset
+            else gitdiff.changed_lines(args.base)
+        )
     tally, lived = mutation.evaluate(args.report, args.format, lines)
     if tally.inconclusive:
         return verdict(
@@ -403,6 +406,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("report", type=Path)
     p.add_argument("--format", choices=sorted(mutation.PARSERS), required=True)
     p.add_argument("--base", help="only count mutants on lines changed since BASE")
+    p.add_argument(
+        "--preset",
+        choices=sorted(presets.PRESETS),
+        help="with --base, also count mutants in source functions the changed tests touch",
+    )
     p.set_defaults(func=cmd_mutation)
 
     p = sub.add_parser("scorecard", help="gate: repository maturity level")

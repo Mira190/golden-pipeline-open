@@ -73,7 +73,7 @@ def test_full_run_mirrors_the_pipeline(repo):
         "GOLDEN_MUTATE": "pkg.a.x_f__mutmut_*",
         "GOLDEN_BASE": base,
     }
-    assert by_name["mutation"].argv[-2:] == ["--base", base]
+    assert by_name["mutation"].argv[-4:] == ["--base", base, "--preset", "python"]
 
 
 def test_no_flake_or_mutation_steps_without_changes(repo):

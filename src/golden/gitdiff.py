@@ -74,38 +74,78 @@ def _target(header: str) -> str:
     return _unquote(header[4:].removesuffix("\t")).removeprefix("b/")
 
 
-def changed_lines(base: str, *, cwd: Path | None = None) -> dict[str, list[Range]]:
-    """Changed (added or modified) line ranges per file, inclusive, in HEAD's numbering."""
-    out = _git(
+def _diff(base: str, diff_filter: str, cwd: Path | None) -> str:
+    return _git(
         *DIFF_OPTS,
         "diff",
         "-U0",
         "--no-color",
         "--no-ext-diff",
         *PREFIXES,
-        "--diff-filter=ACMR",
+        f"--diff-filter={diff_filter}",
         "--relative",
         f"{base}...HEAD",
         cwd=cwd,
     )
-    result: dict[str, list[Range]] = {}
+
+
+def _hunks(out: str) -> tuple[dict[str, list[Range]], dict[str, list[str]]]:
+    """Added line ranges (HEAD numbering) and the text of added and removed lines, per file.
+
+    A deleted file is keyed by its old path, with only removed lines.
+    """
+    ranges: dict[str, list[Range]] = {}
+    texts: dict[str, list[str]] = {}
+    old_path: str | None = None
     current: str | None = None
     # Hunk bodies are skipped by count, so an added line that itself starts
     # with "++ " (shown as "+++ ...") can never be mistaken for a file header.
     body = 0
     for line in out.split("\n"):
         if body:
-            body -= not line.startswith("\\")  # "\ No newline at end of file"
+            if not line.startswith("\\"):  # "\ No newline at end of file"
+                body -= 1
+                if current:
+                    texts.setdefault(current, []).append(line[1:])
+        elif line.startswith("--- "):
+            old_path = _unquote(line[4:].removesuffix("\t")).removeprefix("a/")
         elif line.startswith("+++ "):
-            # Never "+++ /dev/null": --diff-filter=ACMR excludes deletions.
-            current = _target(line)
+            current = old_path if line == "+++ /dev/null" else _target(line)
         elif current and (m := HUNK.match(line)):
             old = int(m[1]) if m[1] is not None else 1
             start, count = int(m[2]), int(m[3]) if m[3] is not None else 1
             body = old + count
             if count:
-                result.setdefault(current, []).append((start, start + count - 1))
-    return result
+                ranges.setdefault(current, []).append((start, start + count - 1))
+    return ranges, texts
+
+
+def changed_lines(base: str, *, cwd: Path | None = None) -> dict[str, list[Range]]:
+    """Changed (added or modified) line ranges per file, inclusive, in HEAD's numbering."""
+    return _hunks(_diff(base, "ACMR", cwd))[0]
+
+
+def changed_text(base: str, *, cwd: Path | None = None) -> dict[str, str]:
+    """The added and removed lines of each changed file, deleted files included.
+
+    What a change *took away* matters for test code: a removed assertion is as
+    much a change to what is tested as an added one.
+    """
+    return {path: "\n".join(lines) for path, lines in _hunks(_diff(base, "ACMRD", cwd))[1].items()}
+
+
+def tracked_files(*, cwd: Path | None = None) -> list[str]:
+    """Files git tracks beneath `cwd`, relative to it."""
+    out = _git(*DIFF_OPTS, "ls-files", "-z", cwd=cwd)
+    return sorted(name for name in out.split("\0") if name)
+
+
+def changed_anywhere(base: str, pathspecs: list[str], *, cwd: Path | None = None) -> list[str]:
+    """Repository-relative paths matching `pathspecs` that changed since merge-base(base, HEAD),
+    deletions included; pathspecs are relative to the repository root."""
+    specs = [f":(top,literal){p}" for p in pathspecs]
+    out = _git(*DIFF_OPTS, "diff", "--name-only", "-z", f"{base}...HEAD", "--", *specs, cwd=cwd)
+    return sorted(name for name in out.split("\0") if name)
 
 
 def merge_base(ref: str, *, cwd: Path | None = None) -> str:

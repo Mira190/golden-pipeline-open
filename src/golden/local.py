@@ -109,6 +109,8 @@ def steps(language: str, inputs: dict[str, str], policy: Policy, opts: Options) 
                     cmds["mutation-format"],
                     "--base",
                     base,
+                    "--preset",
+                    language,
                 ],
             ),
         ]

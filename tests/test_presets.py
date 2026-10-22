@@ -288,3 +288,144 @@ def test_node_test_named_after_dotted_source():
 )
 def test_runnable_tests_by_preset_name(preset, path, runnable):
     assert presets.get(preset).is_runnable_test(path) is runnable
+
+
+PY_FUNCTIONS = """\
+import functools
+
+
+@functools.cache
+def first(a):
+    return a
+
+
+async def second():
+    return 2
+
+
+class Cart:
+    def add(self, x):
+        return x
+
+    def first(self):
+        return 1
+
+
+def broken_nothing():
+    pass
+"""
+
+
+def test_python_function_ranges():
+    assert PY.function_ranges(PY_FUNCTIONS) == {
+        "first": [(4, 6), (17, 18)],
+        "second": [(9, 10)],
+        "add": [(14, 15)],
+        "broken_nothing": [(21, 22)],
+    }
+    assert PY.function_ranges("def broken(:") == {}
+
+
+TS_FUNCTIONS = """\
+import { x } from "./x";
+
+export function bulk(q: number): number {
+  if (q > 10) {
+    return 2;
+  }
+  return 1;
+}
+
+export const half = (n: number): number => n / 2;
+
+export const twice = async (n: number) => {
+  const s = "}";
+  const t = `{`;
+  return n * 2; // }
+};
+
+function* gen() {
+  yield 1;
+}
+
+export default function main() {}
+
+class Cart {
+  private items: number[] = [];
+
+  add(item: number): void {
+    this.items.push(item);
+  }
+
+  async total<T>(fn: (a: number) => T): Promise<number> {
+    if (this.items.length) {
+      return 1;
+    }
+    return 0;
+  }
+}
+
+const data = { a: 1 };
+const fn = function named() {
+  return 1;
+};
+const unterminated = () => {
+"""
+
+
+def test_node_function_ranges():
+    assert NODE.function_ranges(TS_FUNCTIONS) == {
+        "bulk": [(3, 8)],
+        "half": [(10, 10)],
+        "twice": [(12, 16)],
+        "gen": [(18, 20)],
+        "main": [(22, 22)],
+        "add": [(27, 29)],
+        "total": [(31, 36)],
+        "fn": [(40, 42)],
+        "unterminated": [(43, 43)],
+    }
+
+
+def test_node_control_flow_is_not_a_method():
+    text = (
+        "class A {\n  run() {\n    if (x) {\n      y();\n    }\n    for (a of b) {\n    }\n  }\n}\n"
+    )
+    assert NODE.function_ranges(text) == {"run": [(2, 8)]}
+
+
+GO_FUNCTIONS = """\
+package pricing
+
+func One() int { return 1 }
+
+// Total sums.
+func (c *Cart) Total(x int) int {
+\tif x > 1 {
+\t\treturn 2
+\t}
+\treturn x
+}
+
+func Map[T any](xs []T) []T {
+\treturn xs
+}
+
+func Broken() int {
+\treturn 1
+"""
+
+
+def test_go_function_ranges():
+    assert GO.function_ranges(GO_FUNCTIONS) == {
+        "One": [(3, 3)],
+        "Total": [(6, 11)],
+        "Map": [(13, 15)],
+        "Broken": [(17, 17)],
+    }
+
+
+def test_brace_end_without_a_block_ends_at_the_statement():
+    lines = ["const f = (a) =>", "  a + 1;", "next();"]
+    assert presets._brace_end(lines, 0) == 1
+    assert presets._brace_end(["const g = () =>", "  1"], 0) == 0

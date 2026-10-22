@@ -343,7 +343,9 @@ jobs:
           REPORT: ${{ needs.plan.outputs.mutation-report }}
           FORMAT: ${{ needs.plan.outputs.mutation-format }}
           BASE: ${{ needs.plan.outputs.base }}
-        run: golden mutation "$REPORT" --format "$FORMAT" --base "$BASE"
+          LANGUAGE: ${{ inputs.language }}
+        # --preset: also count mutants in source functions the changed tests touch.
+        run: golden mutation "$REPORT" --format "$FORMAT" --base "$BASE" --preset "$LANGUAGE"
 
   security:
     name: security
