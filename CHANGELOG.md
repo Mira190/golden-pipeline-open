@@ -16,10 +16,10 @@ A change never grades itself:
   Repositories without code-owner review drop from L3 to L2.
 
 Measured: a new gate decision benchmark (`evals/`, also run by `tests/test_evals.py`). It holds
-80 labelled pull requests (legitimate, gaming and malformed), replayed through the real CLI and
+81 labelled pull requests (legitimate, gaming and malformed), replayed through the real CLI and
 scored as escapes, false blocks, robustness failures and crashes. Against v1.0.0 it finds 21
-escapes, 16 false blocks and 13 robustness failures, 7 of them tracebacks. All are fixed below
-except one documented gap.
+escapes, 16 false blocks and 13 robustness failures, 7 of them tracebacks. All are fixed below.
+Two documented gaps remain (see `evals/README.md`).
 
 Fewer false blocks:
 

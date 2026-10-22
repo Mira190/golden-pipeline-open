@@ -61,8 +61,8 @@ The same scenarios, run against the code before and after the hardening in this 
 
 | | Scenarios | Correct | Escapes | False blocks | Robustness failures | Crashes | Known gaps |
 |---|---|---|---|---|---|---|---|
-| v1.0.0 (initial release) | 80 | 29 | **21** | **16** | **13** | 7 | 1 |
-| now | 80 | 79 | 0 | 0 | 0 | 0 | 1 |
+| v1.0.0 (initial release) | 81 | 29 | **21** | **16** | **13** | 7 | 2 |
+| now | 81 | 79 | 0 | 0 | 0 | 0 | 2 |
 
 (Two scorecard scenarios exercise the `gates-on` control, which v1.0.0 doesn't have. They count
 against it: one as an escape, one as a false block.)
@@ -88,9 +88,15 @@ The most common false blocks before the hardening, all now fixed:
 - A change to only `conftest.py`. The flake gate ran pytest on it and pytest exited 5.
 - Multi-line `test-command` inputs.
 
-The remaining known gap is `presence/python-string-mention`. A module name inside an unrelated
-string literal still counts as a reference, because strings are how `mock.patch("pkg.mod.f")`
-names its target. Mutation testing is the backstop.
+Two known gaps remain, on purpose and in the open:
+
+- `presence/python-string-mention`: a module name inside an unrelated string literal still counts
+  as a reference, because strings are how `mock.patch("pkg.mod.f")` names its target. Mutation
+  testing is the backstop.
+- `mutation-targets/test-only-weakening`: a pull request that only deletes assertions from an
+  existing test changes no source line. Diff coverage, test presence and diff-scoped mutation
+  therefore have nothing to check, and total coverage doesn't move. The mitigations are listed
+  in the [red-team review](../docs/redteam/2026-10-22-review.md) (R5).
 
 ## Adding a scenario
 

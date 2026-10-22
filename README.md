@@ -55,7 +55,7 @@ Coverage alone can be gamed (see the [drills](docs/evaluation.md#3-drills-does-e
 
 - **Evidence-based.** The design follows published practice from Google, Meta, Amazon, Microsoft, Uber and Shopify, and the academic literature on coverage, mutation testing and flakiness ([research](docs/research.md)).
 - **Dogfooded.** This repository is gated by its own workflows. The `golden` CLI and three example projects ([Python](examples/python), [TypeScript](examples/node), [Go](examples/go)) all run through `golden.yml` on every change. The CLI has 99% branch coverage and passes its own 80% mutation bar.
-- **Measured, not asserted.** A decision benchmark of 80 labelled pull requests ([evals](evals/README.md)) replays legitimate changes, attempts to game each gate, and malformed inputs through the real CLI on every change: 0 escapes, 0 false blocks, 0 crashes, one documented gap. Against v1.0.0 it finds 21 escapes and 16 false blocks, all now fixed.
+- **Measured, not asserted.** A decision benchmark of 81 labelled pull requests ([evals](evals/README.md)) replays legitimate changes, attempts to game each gate, and malformed inputs through the real CLI on every change: 0 escapes, 0 false blocks, 0 crashes, two documented gaps. Against v1.0.0 it finds 21 escapes and 16 false blocks, all now fixed.
 - **A change never grades itself.** Gates read `golden.toml` from the pull request's base commit, so a PR can tighten the bar but not lower it, waive it or exempt itself. The scorecard requires code-owner review of workflows and policy.
 - **Fails closed.** A missing or empty report, a source file the coverage report never measured, a mutation run where most mutants time out or none get a verdict, or a weakened threshold fails the gate instead of passing quietly.
 - **Shift left.** `golden local --language python` runs the same commands and the same gate code on a laptop or inside a coding agent's loop, before the push. It is also available as pre-commit hooks pinned to the same SHA ([adoption](docs/adoption.md#5-shift-left-the-same-verdict-before-you-push)).
@@ -96,7 +96,7 @@ See [configuration](docs/configuration.md) for every key, every workflow input a
 | [Gates](docs/gates.md) | What each gate checks, how it's computed and how to fix a failure |
 | [Configuration](docs/configuration.md) | `golden.toml`, workflow inputs, language defaults |
 | [Evaluation](docs/evaluation.md) | How the gates themselves are tested, maturity model, effectiveness metrics, drills, DORA |
-| [Decision benchmark](evals/README.md) | 80 labelled pull requests every gate must decide correctly |
+| [Decision benchmark](evals/README.md) | 81 labelled pull requests every gate must decide correctly |
 | [Adoption](docs/adoption.md) | Rolling it out to existing repositories, rulesets, monorepos |
 | [Security model](docs/security-model.md) | Threats, the incidents behind each control, and the residual risk |
 
