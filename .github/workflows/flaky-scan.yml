@@ -1,0 +1,26 @@
+# Dogfooding the post-submit loop: the golden CLI's whole suite, five times a night on the default
+# branch, through the same reusable workflow consumers call from templates/ci-scheduled.yml.
+# Not a required check; a red run is the signal.
+name: flaky-scan
+
+on:
+  schedule:
+    - cron: "41 3 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: flaky-scan
+  cancel-in-progress: false
+
+jobs:
+  golden-cli:
+    uses: $/.github/workflows/scheduled.yml
+    permissions:
+      contents: read
+    with:
+      language: python
+      runs: 5
+      # The same parallel, random-order run as ci.yml's test step, writing one JUnit report per run.
+      test-command: uv run pytest -n auto -p randomly --junitxml="$GOLDEN_REPORT"
