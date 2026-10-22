@@ -45,7 +45,7 @@ stated).
 | 12 | An exception is visible, justified and time-boxed. | OSV-Scanner [`ignoreUntil`](https://google.github.io/osv-scanner/configuration/) | Waivers need a reason and expire within 90 days; any active waiver blocks L4 | `test:tests/test_config.py::test_waiver_active_until_expiry` `scenario:presence/python-base-waiver-honoured` `control:waivers` | ✅ |
 | 13 | A change never grades itself (separation of duties). | [SLSA v1.2 source track](https://slsa.dev/spec/v1.2/source-requirements) | The policy is read at the base commit; a PR may tighten it but never loosen, waive or exempt itself | `scenario:policy/pr-loosens-its-own-bar` `scenario:presence/python-waiver-added-in-pr` `scenario:presence/python-exempt-added-in-pr` `test:tests/test_config.py::test_merge_tightens_but_never_loosens` | ✅ |
 | 14 | Changes to the pipeline and its policy need an owner's review. Required workflows run from a central repository. | [GitHub rulesets: Require workflows to pass](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets) | `owner-review` and `gates-on` controls; `golden plan` flags a PR that edits its own gating | `control:owner-review` `control:gates-on` `scenario:plan/flags-a-change-to-its-own-workflow` `scenario:scorecard/gate-disabled-in-caller` | 🟡 The ruleset itself is a setting the scorecard verifies, not code |
-| 15 | Two-person review of the *final* code. | [SLSA v1.2 Source L4](https://slsa.dev/spec/v1.2/source-requirements) (two-party review); [Google code review](https://google.github.io/eng-practices/review/) | `reviews` (L3) and `fresh-review` (L4: approvals dismissed on push, last pusher can't self-approve) | `control:reviews` `control:fresh-review` `test:tests/test_scorecard.py::test_fresh_review` | ✅ |
+| 15 | Two-person review of the *final* code. | [SLSA v1.2 Source L4](https://slsa.dev/spec/v1.2/source-requirements) (two-party review); [Google code review](https://google.github.io/eng-practices/review/) | `reviews` (L3) and `fresh-review` (L4: approvals dismissed on push, last pusher can't self-approve). This matches the Source L4 requirement; no Source level is claimed (row 35) | `control:reviews` `control:fresh-review` `test:tests/test_scorecard.py::test_fresh_review` | ✅ |
 
 ## C. Mainline health and delivery
 
@@ -66,7 +66,7 @@ stated).
 | 23 | No dangerous workflow patterns; audit the workflows themselves. | [OpenSSF: Dangerous-Workflow](https://github.com/ossf/scorecard/blob/main/docs/checks.md#dangerous-workflow) | No `pull_request_target`; zizmor and actionlint in `security.yml` | `job:security.yml#workflows` `scenario:scorecard/pull-request-target-is-not-pr-ci` | ✅ |
 | 24 | Secrets are never committed. | [Microsoft SDL](https://learn.microsoft.com/en-us/compliance/assurance/assurance-microsoft-security-development-lifecycle) | gitleaks from a digest-pinned image on every PR and push | `job:security.yml#secrets` | ✅ |
 | 25 | Known vulnerabilities: a PR is blocked on what it introduces; the main line on everything. | Google: [OSV-Scanner PR workflow](https://google.github.io/osv-scanner/github-action/); [OpenSSF: Vulnerabilities](https://github.com/ossf/scorecard/blob/main/docs/checks.md#vulnerabilities) | Base-vs-head OSV diff on PRs; blocking on push and schedule; dependency review | `job:security.yml#dependencies` | ✅ |
-| 26 | Signed build provenance and an SBOM for every release artifact. | [SLSA v1.2 Build L2/L3](https://slsa.dev/spec/v1.2/build-requirements); [GitHub attestations](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations/using-artifact-attestations-and-reusable-workflows-to-achieve-slsa-v1-build-level-3) | Sigstore-signed SLSA provenance and SPDX SBOM attestations on container images and release wheels | `job:container.yml#publish` `job:release.yml#release` `control:provenance` | ✅ |
+| 26 | Signed build provenance and an SBOM for every release artifact. | [SLSA v1.2 Build L2/L3](https://slsa.dev/spec/v1.2/build-requirements); [GitHub attestations](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations/using-artifact-attestations-and-reusable-workflows-to-achieve-slsa-v1-build-level-3) | Container images: Sigstore-signed SLSA provenance and an SPDX SBOM from `container.yml`, a reusable workflow. GitHub documents this pattern as reaching Build L3 *when the verifier pins the signer workflow*, as row 27 does. Release wheels: `release.yml` is a plain tag workflow, so Build L2, with the Sigstore bundle attached to the release for offline verification | `job:container.yml#publish` `job:release.yml#release` `control:provenance` `file:.github/workflows/release.yml` | ✅ |
 | 27 | Consumers verify provenance before deploying. | [SLSA v1.2 Build](https://slsa.dev/spec/v1.2/build-requirements) ("consumers MUST be able to validate") | `actions/verify-image` checks provenance and the SBOM, signer workflow and repository, by digest | `file:actions/verify-image/action.yml` `file:templates/deploy-verify.yml` | ✅ |
 | 28 | Track repository security posture continuously. | [OpenSSF Scorecard](https://github.com/ossf/scorecard) | The golden scorecard (L1–L4) gates every PR; OpenSSF Scorecard runs alongside | `cmd:scorecard` `control:ossf` `job:scorecard.yml#analysis` | ✅ |
 
@@ -84,3 +84,51 @@ stated).
 | 31 | A speculative merge engine with a conflict analyser. | [Uber SubmitQueue](https://www.masoud.io/docs/eurosys19.pdf) | GitHub's merge queue covers the scale of the teams this pipeline serves. | Not adopted | ⛔ |
 | 32 | Change-based or predictive test selection. | [Meta, ICSE-SEIP 2019](https://arxiv.org/abs/1810.05286) | Diff coverage, the ratchet and mutation all need the full suite's coverage report; a subset would turn covered lines into false "uncovered" blocks. | Not adopted | ⛔ |
 | 33 | Gating merges on the aggregate OpenSSF score. | [OpenSSF checks](https://github.com/ossf/scorecard/blob/main/docs/checks.md) | Several checks (Contributors, Maintained, Fuzzing) measure project health, not change safety. The score runs alongside but never blocks. | Not adopted | ⛔ |
+| 34 | Two approving reviewers on every change (Branch-Protection, tier 4). | [OpenSSF checks](https://github.com/ossf/scorecard/blob/main/docs/checks.md#branch-protection) | SLSA Source L4 counts the author and one reviewer as the "two trusted persons", and Google requires one approval plus an owner's. A second reviewer adds review latency, which DORA's [change-approval research](https://dora.dev/capabilities/streamlining-change-approval/) counts against delivery. The `reviews` control requires at least one; a team can raise the ruleset's count. | Not adopted | ⛔ |
+| 35 | Source provenance and source verification summary attestations, which every SLSA Source level requires. | [SLSA v1.2 source requirements](https://slsa.dev/spec/v1.2/source-requirements) | No first-party GitHub feature issues them yet, and [slsa-framework/source-tool](https://github.com/slsa-framework/source-tool) is in development. The review and history controls match Source L2 to L4, but no formal Source level is claimed. | Not adopted | ⛔ |
+
+## G. Standards crosswalk
+
+The same controls, by the identifiers each standard uses. Every identifier is checked by
+`tests/test_alignment.py` against the standard's published list, so a mistyped or withdrawn ID
+fails the suite: SSDF v1.1 renumbered several tasks, and PW.3.1, PW.3.2, PW.4.3, PW.4.5 and
+PW.5.2 are now only "moved to" pointers.
+
+Sources, all opened on 2026-10-22:
+
+- [NIST SP 800-218 SSDF v1.1](https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-218.pdf).
+  This is the final version; Rev. 1 (v1.2) is an initial public draft.
+- [SLSA v1.2](https://slsa.dev/spec/v1.2/).
+- [OpenSSF Scorecard checks](https://github.com/ossf/scorecard/blob/main/docs/checks.md).
+- [OWASP SAMM v2](https://owaspsamm.org/model/).
+- [DORA capabilities](https://dora.dev/capabilities/).
+
+SSDF covers security vulnerabilities and never names coverage, mutation or flaky tests. Mappings
+marked *interpretive* rest on the general wording of a task, not on a direct statement.
+
+| Control area | Matrix rows | NIST SSDF v1.1 | SLSA v1.2 | OpenSSF Scorecard | OWASP SAMM v2 | DORA capability |
+|---|---|---|---|---|---|---|
+| Testing gates: diff coverage, ratchet, mutation, presence, flakes | `rows:1-8` | `ssdf:PW.8.1` `ssdf:PW.8.2` `ssdf:PO.4.1` `ssdf:PO.4.2` (interpretive) | | `openssf:CI-Tests` | `samm:V-RT-A-3` `samm:I-SB-A-3` | `dora:test-automation` `dora:continuous-integration` |
+| Findings on the diff, fail closed | `rows:9-10` | `ssdf:PW.7.1` `ssdf:PW.7.2` `ssdf:PW.5.1` | | `openssf:SAST` | `samm:V-ST-A-3` | `dora:code-maintainability` |
+| Policy as code, floors, expiring exceptions | `rows:11-12` | `ssdf:PO.1.2` (Ex 7, exception handling) `ssdf:PO.4.1` (Ex 5) `ssdf:PW.1.2` (Ex 3) | | | `samm:G-PC-A-2` | |
+| Separation of duties: base-anchored policy, owner review, two-person review | `rows:13-15` | `ssdf:PS.1.1` (Ex 4, "Have the code owner review and approve") `ssdf:PO.2.1` `ssdf:PW.7.2` | `slsa:source-L3` `slsa:source-L4` (requirements matched, no level claimed) | `openssf:Branch-Protection` `openssf:Code-Review` | | `dora:streamlining-change-approval` |
+| Mainline green, presubmit | `rows:16-17` | `ssdf:PO.4.2` (Ex 3, automated decisions) | | `openssf:Branch-Protection` | `samm:I-SB-A-2` | `dora:trunk-based-development` `dora:continuous-integration` |
+| Test what ships, release from main | `rows:18-19` | `ssdf:PW.6.2` `ssdf:PO.5.1` | `slsa:build-L2` | | `samm:I-SD-A-2` | `dora:deployment-automation` `dora:continuous-delivery` |
+| Pinned and updated dependencies | `rows:20-21` | `ssdf:PW.4.1` `ssdf:PW.4.4` `ssdf:PO.3.2` | | `openssf:Pinned-Dependencies` `openssf:Dependency-Update-Tool` | `samm:I-SB-B-2` | |
+| Least privilege, workflow audit | `rows:22-23` | `ssdf:PS.1.1` `ssdf:PO.5.1` `ssdf:PW.7.2` | | `openssf:Token-Permissions` `openssf:Dangerous-Workflow` | | `dora:pervasive-security` |
+| Secret scanning | `rows:24-24` | `ssdf:PW.7.2` (Ex 6, interpretive) | | | | `dora:pervasive-security` |
+| Known vulnerabilities, disclosure policy | `rows:25-25` | `ssdf:PW.4.4` (Ex 1, 2) `ssdf:RV.1.1` `ssdf:RV.1.2` `ssdf:RV.1.3` `ssdf:RV.2.2` | | `openssf:Vulnerabilities` `openssf:Security-Policy` | `samm:I-SB-B-3` | `dora:pervasive-security` |
+| Provenance and SBOM | `rows:26-26` | `ssdf:PS.2.1` `ssdf:PS.3.1` `ssdf:PS.3.2` | `slsa:build-L2` `slsa:build-L3` (container images, verifier-pinned) | `openssf:Signed-Releases` `openssf:SBOM` | `samm:I-SB-B-1` | |
+| Verify before deploy | `rows:27-27` | `ssdf:PW.4.4` (Ex 6) `ssdf:PO.1.3` | `slsa:build-L2` (consumer: "Validate the authenticity of the provenance") | | `samm:I-SD-A-3` | `dora:deployment-automation` |
+| Delivery metrics, measured gates, escaped-defect review | `rows:29-30` | `ssdf:RV.3.1` `ssdf:RV.3.2` `ssdf:RV.3.3` `ssdf:RV.3.4` `ssdf:PO.4.1` (Ex 6) | | | `samm:I-DM-B-1` `samm:I-DM-B-2` `samm:I-DM-B-3` | `dora:continuous-delivery` |
+
+### Where a standard asks for more than this pipeline gives
+
+- **Bypass actors.** OpenSSF treats any ruleset bypass actor as "admins not enforced". A
+  `contents: read` token cannot see bypass actors, so the scorecard cannot check them. Audit them
+  in the organisation settings.
+- **Hardened egress.** SSDF PO.5.1 Ex 3 asks to restrict build-environment connections to "only
+  what is necessary". `golden.yml` audits egress by default; `egress-policy: block` with an
+  allowlist is the caller's choice, because the endpoints depend on the project's toolchain.
+- **Secret scanning and dependency cooldowns** have no direct SSDF v1.1 wording. The mappings
+  above are interpretive.

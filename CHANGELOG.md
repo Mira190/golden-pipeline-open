@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+Proof of alignment:
+
+- `docs/alignment.md` maps 35 published practices (Google, Meta, Uber, Shopify, Amazon, SLSA,
+  OpenSSF, DORA) to the control that implements each, with executable evidence, and crosswalks
+  the controls to NIST SSDF v1.1, SLSA v1.2, OpenSSF Scorecard, OWASP SAMM v2 and DORA.
+  `tests/test_alignment.py` resolves every cited scenario, drill, test, job, control and
+  standard identifier, so a renamed scenario or a withdrawn SSDF task fails the suite.
+
 Second-person rules:
 
 - The test-presence opt-out label counts only when someone other than the PR author applied it,
@@ -19,6 +27,9 @@ Signals and hermeticity:
 
 Verify before you deploy (SLSA: consumers must be able to validate provenance):
 
+- `release.yml` attaches the Sigstore attestation bundle to the GitHub release, so the wheel's
+  provenance can be verified offline (`gh attestation verify --bundle`) and OpenSSF Scorecard's
+  Signed-Releases check, which reads release assets, can see it.
 - New `actions/verify-image` composite action and `templates/deploy-verify.yml`. A deploy job
   verifies, with `gh attestation verify`, that an image *digest* (tags are refused) carries SLSA
   build provenance and an SBOM attestation signed by this repository's `container.yml` for the

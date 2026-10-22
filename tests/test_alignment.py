@@ -12,8 +12,18 @@ controls. Each row cites executable evidence with typed tokens:
   cmd:<subcommand>           a `golden` subcommand
   file:<path>                any file in the repository
 
-A renamed scenario or a deleted job fails this test until the matrix is fixed,
-so the alignment claim cannot quietly rot.
+The standards crosswalk cites each standard's own identifiers, checked against
+the published lists below:
+
+  ssdf:<task>                a NIST SP 800-218 (SSDF v1.1) task, e.g. PW.8.2
+  slsa:<track>-L<n>          a SLSA v1.2 level
+  openssf:<check>            an OpenSSF Scorecard check
+  samm:<stream>              an OWASP SAMM v2 stream question, e.g. I-SB-B-3
+  dora:<capability>          a DORA capability page slug
+  rows:<first>-<last>        matrix rows the crosswalk line covers
+
+A renamed scenario, a deleted job or a withdrawn standard ID fails this test
+until the matrix is fixed, so the alignment claim cannot quietly rot.
 """
 
 import importlib.util
@@ -29,8 +39,89 @@ from golden import scorecard as sc
 
 ROOT = Path(__file__).resolve().parent.parent
 MATRIX = ROOT / "docs" / "alignment.md"
-TOKEN = re.compile(r"`(scenario|realfault|test|drill|job|control|cmd|file):([^`]+)`")
+KINDS = "scenario|realfault|test|drill|job|control|cmd|file|ssdf|slsa|openssf|samm|dora|rows"
+TOKEN = re.compile(rf"`({KINDS}):([^`<][^`]*)`")  # `kind:<placeholder>` is the legend
 ROW = re.compile(r"^\| *(\d+) *\|")
+
+# NIST SP 800-218 v1.1 (February 2022), tables in section 3. Tasks that only say
+# "Moved to ..." (PW.3.1, PW.3.2, PW.4.3, PW.4.5, PW.5.2) are deliberately absent.
+SSDF = {
+    *(f"PO.1.{n}" for n in (1, 2, 3)),
+    *(f"PO.2.{n}" for n in (1, 2, 3)),
+    *(f"PO.3.{n}" for n in (1, 2, 3)),
+    *(f"PO.4.{n}" for n in (1, 2)),
+    *(f"PO.5.{n}" for n in (1, 2)),
+    "PS.1.1",
+    "PS.2.1",
+    "PS.3.1",
+    "PS.3.2",
+    *(f"PW.1.{n}" for n in (1, 2, 3)),
+    "PW.2.1",
+    "PW.4.1",
+    "PW.4.2",
+    "PW.4.4",
+    "PW.5.1",
+    *(f"PW.6.{n}" for n in (1, 2)),
+    *(f"PW.7.{n}" for n in (1, 2)),
+    *(f"PW.8.{n}" for n in (1, 2)),
+    *(f"PW.9.{n}" for n in (1, 2)),
+    *(f"RV.1.{n}" for n in (1, 2, 3)),
+    *(f"RV.2.{n}" for n in (1, 2)),
+    *(f"RV.3.{n}" for n in (1, 2, 3, 4)),
+}
+# SLSA v1.2: Build L0-L3, Source L1-L4.
+SLSA = {*(f"build-L{n}" for n in range(4)), *(f"source-L{n}" for n in range(1, 5))}
+# github.com/ossf/scorecard docs/checks.md.
+OPENSSF = {
+    "Binary-Artifacts",
+    "Branch-Protection",
+    "CI-Tests",
+    "CII-Best-Practices",
+    "Code-Review",
+    "Contributors",
+    "Dangerous-Workflow",
+    "Dependency-Update-Tool",
+    "Fuzzing",
+    "License",
+    "Maintained",
+    "Packaging",
+    "Pinned-Dependencies",
+    "SAST",
+    "SBOM",
+    "Security-Policy",
+    "Signed-Releases",
+    "Token-Permissions",
+    "Vulnerabilities",
+    "Webhooks",
+}
+# OWASP SAMM v2: business function, practice, stream A or B, maturity level 1-3.
+SAMM_PRACTICES = {
+    "G": ("SM", "PC", "EG"),
+    "D": ("TA", "SR", "SA"),
+    "I": ("SB", "SD", "DM"),
+    "V": ("AA", "RT", "ST"),
+    "O": ("IM", "EM", "OM"),
+}
+SAMM = {
+    f"{function}-{practice}-{stream}-{level}"
+    for function, practices in SAMM_PRACTICES.items()
+    for practice in practices
+    for stream in "AB"
+    for level in (1, 2, 3)
+}
+# dora.dev/capabilities/<slug>/.
+DORA = {
+    "code-maintainability",
+    "continuous-delivery",
+    "continuous-integration",
+    "deployment-automation",
+    "pervasive-security",
+    "streamlining-change-approval",
+    "test-automation",
+    "trunk-based-development",
+    "version-control",
+    "working-in-small-batches",
+}
 
 
 def _load(name, path):
@@ -51,7 +142,7 @@ def rows():
 
 
 def tokens():
-    return sorted({(kind, ref) for _, line in rows() for kind, ref in TOKEN.findall(line)})
+    return sorted(set(TOKEN.findall(MATRIX.read_text(encoding="utf-8"))))
 
 
 @pytest.fixture(scope="module")
@@ -72,6 +163,11 @@ def known():
         "drill": {f"{lang}/{name}" for lang in drill.FEATURES for name in drill.EXPECTED},
         "control": {c.id for c in sc.CONTROLS},
         "cmd": set(commands),
+        "ssdf": SSDF,
+        "slsa": SLSA,
+        "openssf": OPENSSF,
+        "samm": SAMM,
+        "dora": DORA,
     }
 
 
@@ -84,10 +180,30 @@ def test_matrix_rows_are_numbered_and_cite_evidence():
         assert "http" in line or "](" in line, f"row {n} cites no source"
 
 
+def test_standard_vocabularies_exclude_withdrawn_and_malformed_ids():
+    assert len(SSDF) == 42
+    assert not {"PW.3.1", "PW.3.2", "PW.4.3", "PW.4.5", "PW.5.2"} & SSDF
+    assert len(OPENSSF) == 20
+    assert len(SAMM) == 15 * 2 * 3
+    assert "I-SB-B-3" in SAMM
+    assert "I-SB-C-1" not in SAMM
+    assert "build-L3" in SLSA
+    assert "build-L4" not in SLSA
+    assert "source-L0" not in SLSA
+
+
+def test_crosswalk_cites_every_standard():
+    kinds = {kind for kind, _ in tokens()}
+    assert {"ssdf", "slsa", "openssf", "samm", "dora", "rows"} <= kinds
+
+
 @pytest.mark.parametrize(("kind", "ref"), tokens(), ids=str)
 def test_evidence_exists(kind, ref, known):
     if kind in known:
-        assert ref in known[kind], f"{kind}:{ref} is not in the repository"
+        assert ref in known[kind], f"{kind}:{ref} is not in the repository or the standard"
+    elif kind == "rows":
+        first, _, last = ref.partition("-")
+        assert 1 <= int(first) <= int(last) <= len(rows()), ref
     elif kind == "test":
         path, _, function = ref.partition("::")
         text = (ROOT / path).read_text(encoding="utf-8")
