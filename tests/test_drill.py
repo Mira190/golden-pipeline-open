@@ -22,6 +22,13 @@ sys.modules["drill"] = drill
 _spec.loader.exec_module(drill)
 
 
+@pytest.fixture(autouse=True)
+def _original_cli_in_subprocesses(monkeypatch):
+    """`golden changed` runs as a subprocess; under mutmut it must not inherit the active
+    mutant (mutmut keeps a process-local copy, so in-process calls are unaffected)."""
+    monkeypatch.delenv("MUTANT_UNDER_TEST", raising=False)
+
+
 @pytest.fixture
 def shell(monkeypatch):
     """Record every shell step; `codes` maps a step's first golden subcommand to its exit code."""
