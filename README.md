@@ -99,6 +99,7 @@ See [configuration](docs/configuration.md) for every key, every workflow input a
 | [Decision benchmark](evals/README.md) | 81 labelled pull requests every gate must decide correctly |
 | [Adoption](docs/adoption.md) | Rolling it out to existing repositories, rulesets, monorepos |
 | [Security model](docs/security-model.md) | Threats, the incidents behind each control, and the residual risk |
+| [Red-team review](docs/redteam/2026-10-22-review.md) | What was found, what was fixed, and the open findings with owner-ready fixes |
 
 ## Repository layout
 
