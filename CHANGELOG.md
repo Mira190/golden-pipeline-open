@@ -17,6 +17,10 @@ A change never grades itself:
   changes. GitHub runs the pull request's own copy of a workflow, so a code owner must review
   it; docs/adoption.md now recommends an organisation ruleset that requires the pipeline from a
   governance repository.
+- Scorecard L4 gains `fresh-review`: the pull-request rule must dismiss approvals on new pushes
+  and require approval of the most recent push, so a second person approves the *final* code
+  (two-person review). Ruleset bypass actors stay out of scope: GitHub returns them only to a
+  token with write access to the ruleset.
 
 - On pull requests and in the merge queue, every gate reads `golden.toml` **at the base commit**.
   The change may tighten the policy. Anything that loosens it applies only after merge, and is

@@ -39,7 +39,7 @@ Then require the single status check **`ci / golden`** in a branch ruleset. That
 | **Flake gate** | changed tests re-run 10× and must pass every time | same | same |
 | **Mutation testing** | mutmut, scoped to changed functions | StrykerJS, scoped to changed lines | gremlins, scoped to changed lines |
 | Supply chain | gitleaks, OSV-Scanner, dependency review, zizmor, actionlint | same | same, plus govulncheck |
-| Repository scorecard | maturity level L1–L4 (rulesets, pinning, owners, cooldowns) | same | same |
+| Repository scorecard | maturity level L1–L4 (rulesets, two-person review, pinning, owners, cooldowns) | same | same |
 | Container (optional) | build → smoke test → SBOM → grype → signed SLSA provenance | same | same |
 
 Bold gates are the ones that replace "did they test it properly?":
