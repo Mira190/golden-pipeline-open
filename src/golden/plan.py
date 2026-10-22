@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import secrets
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -97,10 +98,13 @@ class Event:
 
     def base(self) -> str:
         """The commit a change is judged against; empty when there is no change to judge."""
-        if self.name in {"pull_request", "pull_request_target"}:
-            return str(self.payload["pull_request"]["base"]["sha"])
-        if self.name == "merge_group":
-            return str(self.payload["merge_group"]["base_sha"])
+        try:
+            if self.name in {"pull_request", "pull_request_target"}:
+                return str(self.payload["pull_request"]["base"]["sha"])
+            if self.name == "merge_group":
+                return str(self.payload["merge_group"]["base_sha"])
+        except (KeyError, TypeError) as exc:
+            raise ValueError(f"{self.name} event payload has no base commit") from exc
         return ""
 
     def labels(self) -> set[str]:
@@ -154,7 +158,9 @@ def changes(language: str, base: str, policy: Policy) -> dict[str, str]:
     preset = presets.get(language)
     changed = gitdiff.changed_files(base)
     sources = [p for p in changed if preset.is_source(p) and not match_any(p, policy.exempt)]
-    tests = [p for p in changed if preset.is_test(p)]
+    # Only files a test runner can execute: pytest on a conftest.py or vitest on a
+    # fixture finds no tests and fails, which would block a legitimate change.
+    tests = [p for p in changed if preset.is_runnable_test(p)]
     lines = gitdiff.changed_lines(base)
     targets = sorted(
         {
@@ -196,11 +202,15 @@ def build(
 
 
 def write_outputs(outputs: dict[str, str], target: Path) -> None:
+    """Append job outputs; multi-line values use a delimiter they cannot contain."""
     with target.open("a", encoding="utf-8") as fh:
         for key, value in outputs.items():
-            if "\n" in value:
-                raise ValueError(f"output {key} must be a single line")
-            fh.write(f"{key}={value}\n")
+            if "\n" not in value and "\r" not in value:
+                fh.write(f"{key}={value}\n")
+                continue
+            # 128 random bits: a value cannot predict, and so cannot close, the block.
+            delimiter = f"GOLDEN_{secrets.token_hex(16)}"
+            fh.write(f"{key}<<{delimiter}\n{value}\n{delimiter}\n")
 
 
 def render(language: str, outputs: dict[str, str]) -> str:
@@ -215,7 +225,9 @@ def render(language: str, outputs: dict[str, str]) -> str:
         "mutate",
     )
     rows = [
-        f"| {k} | `{outputs[k].replace('|', '\\|')}` |" if outputs[k] else f"| {k} | _(none)_ |"
+        f"| {k} | `{outputs[k].replace('|', '\\|').replace(chr(10), ' ⏎ ')}` |"
+        if outputs[k]
+        else f"| {k} | _(none)_ |"
         for k in keys
     ]
     return "\n".join([f"### Golden plan ({language})", "", "| | |", "|---|---|", *rows])

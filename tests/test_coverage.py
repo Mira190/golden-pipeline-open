@@ -78,3 +78,18 @@ def test_baseline_roundtrip(tmp_path):
 )
 def test_ratchet(current, baseline, ok, delta):
     assert coverage.ratchet(current, baseline, 0.5) == (ok, delta)
+
+
+@pytest.mark.parametrize("content", ["[]", '{"percent": 80}', '"80"'])
+def test_baseline_without_line_percent_fails_closed(tmp_path, content):
+    path = tmp_path / "baseline.json"
+    path.write_text(content)
+    with pytest.raises(ValueError, match="has no line_percent"):
+        coverage.read_baseline(path)
+
+
+def test_truncated_cobertura_fails_closed(tmp_path):
+    path = tmp_path / "coverage.xml"
+    path.write_text('<?xml version="1.0" ?><coverage lines-covered="3"')
+    with pytest.raises(ValueError, match="unreadable Cobertura report"):
+        coverage.read_totals(path)

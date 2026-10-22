@@ -30,7 +30,10 @@ RULES = [
         "type": "required_status_checks",
         "parameters": {"required_status_checks": [{"context": "ci / golden"}]},
     },
-    {"type": "pull_request", "parameters": {"required_approving_review_count": 1}},
+    {
+        "type": "pull_request",
+        "parameters": {"required_approving_review_count": 1, "require_code_owner_review": True},
+    },
     {"type": "non_fast_forward"},
     {"type": "deletion"},
 ]
@@ -72,7 +75,7 @@ def test_empty_repository_is_level_zero(tmp_path):
 def test_unknown_rules_never_count_as_pass(tmp_path):
     results = sc.evaluate(repo(tmp_path, ELITE, rules=None))
     unknown = {r.id for r in results if r.passed is None}
-    assert unknown == {"required-check", "reviews", "history"}
+    assert unknown == {"required-check", "reviews", "owner-review", "history"}
     assert sc.level(results) == 2
 
 
@@ -191,3 +194,195 @@ def test_rules_from_env(monkeypatch):
     monkeypatch.setenv("GOLDEN_DEFAULT_BRANCH", "main")
     monkeypatch.setattr(sc, "fetch_rules", lambda repo, branch, token: [{"type": repo + branch}])
     assert sc.rules_from_env() == [{"type": "o/rmain"}]
+
+
+def check(tmp_path, control, files, rules=RULES, policy_path="golden.toml"):
+    policy = config.from_mapping({})
+    return control(sc.Repo(make(tmp_path, files), policy, rules, policy_path))
+
+
+@pytest.mark.parametrize(
+    ("ci", "expected"),
+    [
+        ("on:\n  pull_request:\n", True),
+        ("on:\n  pull_request:\n    types: [opened]\n", True),
+        ("on: [push, pull_request]\n", True),
+        ("on: pull_request\n", True),
+        ("on:\n  - push\n  - pull_request\n", True),
+        ("on:\n  pull_request_target:\n", False),
+        ("on: push\nconcurrency: ${{ github.event.pull_request.number }}\n", False),
+        ("on: push\njobs:\n  a:\n    if: github.event_name == 'pull_request'\n", False),
+        ("on: push  # pull_request later\n", False),
+        ("on: push\n# on: pull_request\n", False),
+    ],
+)
+def test_runs_on_prs(tmp_path, ci, expected):
+    assert check(tmp_path, sc.runs_on_prs, {".github/workflows/ci.yml": ci}) is expected
+
+
+@pytest.mark.parametrize(
+    ("top", "expected"),
+    [
+        ("permissions: {}\n", True),
+        ("permissions: read-all\n", True),
+        ("permissions:\n  contents: read\n  pull-requests: read\n", True),
+        (
+            "permissions:\n  contents: read\njobs:\n  r:\n"
+            "    permissions:\n      contents: write\n",
+            True,
+        ),
+        ("permissions: write-all\n", False),
+        ("permissions:\n  contents: write\n", False),
+        ("permissions:\n  contents: read\n\n  packages: write\njobs: {}\n", False),
+        ("permissions: { contents: write }\n", False),
+        ("permissions:\njobs: {}\n", False),
+        ("jobs:\n  a:\n    permissions: {}\n", False),
+        ("# permissions: {}\non: push\n", False),
+    ],
+)
+def test_least_privilege(tmp_path, top, expected):
+    assert check(tmp_path, sc.least_privilege, {".github/workflows/ci.yml": top}) is expected
+
+
+def test_top_level_permissions():
+    assert sc.top_level_permissions("on: push\npermissions: read-all\n") == "read-all"
+    block = "permissions:\n  contents: read\n\n  checks: write\njobs: {}\n"
+    assert sc.top_level_permissions(block) == "contents: read\nchecks: write"
+    assert sc.top_level_permissions("permissions:\n") == ""
+    assert sc.top_level_permissions("jobs:\n  permissions: {}\n") == ""
+
+
+GOLDEN_CALL = f"jobs:\n  ci:\n    uses: o/golden-pipeline/.github/workflows/golden.yml@{PIN}\n"
+
+
+@pytest.mark.parametrize(
+    ("ci", "expected"),
+    [
+        (GOLDEN_CALL + "    with:\n      language: go\n", True),
+        (GOLDEN_CALL + "    with:\n      mutation: false\n", False),
+        (GOLDEN_CALL + "    with:\n      security:  false\n", False),
+        (GOLDEN_CALL + "    with:\n      mutation: true\n", True),
+        (GOLDEN_CALL + "    with:\n      # mutation: false\n", True),
+        ("jobs:\n  other:\n    with:\n      mutation: false\n", True),
+    ],
+)
+def test_gates_enabled(tmp_path, ci, expected):
+    assert check(tmp_path, sc.gates_enabled, {".github/workflows/ci.yml": ci}) is expected
+
+
+@pytest.mark.parametrize(
+    ("ci", "provenance", "ossf"),
+    [
+        (f"steps:\n  - uses: actions/attest-build-provenance@{PIN}\n", True, False),
+        (
+            f"jobs:\n  c:\n    uses: o/golden-pipeline/.github/workflows/container.yml@{PIN}\n",
+            True,
+            False,
+        ),
+        ("jobs:\n  c:\n    uses: ./.github/workflows/container.yml\n", True, False),
+        (f"steps:\n  - uses: ossf/scorecard-action@{PIN}\n", False, True),
+        ("# uses: actions/attest@x and ossf/scorecard-action@y\n", False, False),
+        ("steps:\n  - run: echo container.yml ossf/scorecard-action\n", False, False),
+        (
+            f"jobs:\n  c:\n    uses: o/r/.github/workflows/my-container.yml.bak@{PIN}\n",
+            False,
+            False,
+        ),
+    ],
+)
+def test_provenance_and_ossf_need_a_real_step(tmp_path, ci, provenance, ossf):
+    files = {".github/workflows/ci.yml": ci}
+    assert check(tmp_path / "p", sc.provenance, files) is provenance
+    assert check(tmp_path / "o", sc.ossf_scorecard, files) is ossf
+
+
+@pytest.mark.parametrize(
+    ("files", "bot", "cooldown"),
+    [
+        (
+            {".github/dependabot.yml": "updates:\n  - cooldown:\n      default-days: 7\n"},
+            True,
+            True,
+        ),
+        ({".github/dependabot.yaml": "updates:\n  - x: 1\n    # cooldown: 7\n"}, True, False),
+        ({".github/dependabot.yml": "# see cooldown docs\nupdates: []\n"}, True, False),
+        ({".renovaterc.json": '{"minimumReleaseAge": "7 days"}'}, True, True),
+        ({".github/renovate.json5": "{\n  minimumReleaseAge: '7 days',\n}"}, True, True),
+        ({"renovate.json5": "{\n  // minimumReleaseAge: '7 days',\n}"}, True, False),
+        ({".gitlab/renovate.json": '{"extends": []}'}, True, False),
+        ({"README.md": "cooldown minimumReleaseAge"}, False, False),
+    ],
+)
+def test_dependency_bots_and_cooldowns(tmp_path, files, bot, cooldown):
+    assert check(tmp_path / "b", sc.deps_bot, files) is bot
+    assert check(tmp_path / "c", sc.dependency_cooldown, files) is cooldown
+
+
+@pytest.mark.parametrize(
+    ("files", "expected"),
+    [
+        ({"svc/api/uv.lock": ""}, True),
+        ({"go.sum": ""}, True),
+        ({"node_modules/x/package-lock.json": ""}, False),
+        ({"vendor/m/go.sum": "", ".venv/lib/uv.lock": "", ".git/x/yarn.lock": ""}, False),
+        ({"package.json": "{}"}, False),
+    ],
+)
+def test_has_lockfile_ignores_foreign_directories(tmp_path, files, expected):
+    assert check(tmp_path, sc.has_lockfile, files) is expected
+
+
+@pytest.mark.parametrize(
+    ("codeowners", "path", "expected"),
+    [
+        ("* @team\n", "golden.toml", True),
+        ("/golden.toml @team\n", "golden.toml", True),
+        ("/golden.toml @team\n", "svc/golden.toml", False),
+        ("golden.toml @team\n", "svc/golden.toml", True),
+        ("/.github/ @team\n", ".github/workflows/ci.yml", True),
+        ("* @team\n/.github/\n", ".github/workflows/ci.yml", False),
+        ("docs/* @team\n", ".github/workflows/ci.yml", False),
+        ("# * @team\n", "golden.toml", False),
+        ("* @team # comment\n\n", "golden.toml", True),
+    ],
+)
+def test_codeowners_last_match_wins(tmp_path, codeowners, path, expected):
+    files = {".github/CODEOWNERS": codeowners}
+    assert sc.owned(sc.Repo(make(tmp_path, files), config.from_mapping({})), path) is expected
+
+
+def test_owned_without_codeowners(tmp_path):
+    assert sc.owned(sc.Repo(tmp_path, config.from_mapping({})), "golden.toml") is False
+
+
+@pytest.mark.parametrize(
+    ("params", "codeowners", "policy_path", "expected"),
+    [
+        ({"require_code_owner_review": True}, "* @team\n", "golden.toml", True),
+        ({"require_code_owner_review": False}, "* @team\n", "golden.toml", False),
+        ({}, "* @team\n", "golden.toml", False),
+        ({"require_code_owner_review": True}, "/.github/ @team\n", "golden.toml", False),
+        ({"require_code_owner_review": True}, "/golden.toml @team\n", "golden.toml", False),
+        (
+            {"require_code_owner_review": True},
+            "/.github/ @t\n/svc/golden.toml @t\n",
+            "svc/golden.toml",
+            True,
+        ),
+    ],
+)
+def test_owner_review(tmp_path, params, codeowners, policy_path, expected):
+    rules = [{"type": "pull_request", "parameters": params}]
+    files = {"CODEOWNERS": codeowners}
+    assert check(tmp_path, sc.owner_review, files, rules, policy_path) is expected
+
+
+def test_owner_review_unknown_without_rules(tmp_path):
+    assert check(tmp_path, sc.owner_review, {}, rules=None) is None
+    assert check(tmp_path, sc.owner_review, {}, rules=[]) is False
+
+
+def test_workflow_comments_are_ignored(tmp_path):
+    files = {".github/workflows/ci.yml": "on: push # pull_request\nx: 'a#b'\n# whole line\n"}
+    repo_ = sc.Repo(make(tmp_path, files), config.from_mapping({}))
+    assert repo_.workflows() == {"ci.yml": "on: push \nx: 'a#b'\n\n"}

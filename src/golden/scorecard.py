@@ -6,10 +6,14 @@ token is available; unknown never counts as a pass.
 
   L1 Adopted   - runs the Golden Pipeline on PRs with a lockfile
   L2 Owned     - CODEOWNERS, automated dependency updates, security policy
-  L3 Enforced  - the golden check is required, reviews required, history
-                 protected, every action pinned, least-privilege tokens,
-                 dependency cooldown
+  L3 Enforced  - the golden check is required, reviews required, code owners
+                 approve workflow and policy changes, history protected, every
+                 action pinned, least-privilege tokens, no gate switched off in
+                 the caller, dependency cooldown
   L4 Verified  - signed provenance, OpenSSF Scorecard, no active waivers
+
+Checks read workflow files with YAML comments removed, so a commented-out line
+never counts as a control.
 """
 
 from __future__ import annotations
@@ -25,8 +29,28 @@ from pathlib import Path
 from typing import Any
 
 from golden.config import Policy
+from golden.globmatch import match
 
 USES = re.compile(r"^\s*(?:-\s*)?uses:\s*['\"]?([^\s'\"#]+)", re.MULTILINE)
+# The `pull_request` trigger, not `pull_request_target` or `github.event.pull_request`.
+PR_TRIGGER = re.compile(r"(?<![\w.'\"-])pull_request(?![\w-])")
+YAML_COMMENT = re.compile(r"(^|\s)#.*$", re.MULTILINE)
+DISABLED_GATE = re.compile(r"^\s*(mutation|security)\s*:\s*false\b", re.MULTILINE)
+DEPS_BOT_FILES = (
+    ".github/dependabot.yml",
+    ".github/dependabot.yaml",
+    "renovate.json",
+    "renovate.json5",
+    ".github/renovate.json",
+    ".github/renovate.json5",
+    ".gitlab/renovate.json",
+    ".renovaterc",
+    ".renovaterc.json",
+    ".renovaterc.json5",
+)
+CODEOWNERS = (".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS")
+# Directories that hold other projects' files, never this project's lockfile.
+FOREIGN_DIRS = {".git", "node_modules", "vendor", ".venv", "venv", "mutants", ".stryker-tmp"}
 SHA_REF = re.compile(r"@[0-9a-f]{40}$")
 GOLDEN_WORKFLOW = re.compile(
     r"(?:[\w.-]+/golden-pipeline(?:-open)?/|\./|\$/)\.github/workflows/golden\.yml"
@@ -47,13 +71,15 @@ class Repo:
     root: Path
     policy: Policy
     rules: list[dict[str, Any]] | None = None  # active branch rules from the API
+    policy_path: str = "golden.toml"  # relative to root
 
     def workflows(self) -> dict[str, str]:
+        """Workflow files with YAML comments removed."""
         wf = self.root / ".github" / "workflows"
         if not wf.is_dir():
             return {}
         files = sorted([*wf.glob("*.yml"), *wf.glob("*.yaml")])
-        return {p.name: p.read_text(encoding="utf-8") for p in files}
+        return {p.name: YAML_COMMENT.sub(r"\1", p.read_text(encoding="utf-8")) for p in files}
 
     def exists(self, *paths: str) -> bool:
         return any((self.root / p).exists() for p in paths)
@@ -85,8 +111,12 @@ def _all_text(repo: Repo) -> str:
     return "\n".join(repo.workflows().values())
 
 
+def _refs(repo: Repo) -> list[str]:
+    return USES.findall(_all_text(repo))
+
+
 def runs_on_prs(repo: Repo) -> bool:
-    return re.search(r"^\s*pull_request\s*:?", _all_text(repo), re.MULTILINE) is not None
+    return PR_TRIGGER.search(_all_text(repo)) is not None
 
 
 def uses_golden(repo: Repo) -> bool:
@@ -94,51 +124,77 @@ def uses_golden(repo: Repo) -> bool:
 
 
 def has_lockfile(repo: Repo) -> bool:
-    return any(next(repo.root.rglob(name), None) for name in LOCKFILES)
+    for _, dirs, files in os.walk(repo.root):
+        dirs[:] = [d for d in dirs if d not in FOREIGN_DIRS]
+        if any(name in files for name in LOCKFILES):
+            return True
+    return False
 
 
 def deps_bot(repo: Repo) -> bool:
-    return repo.exists(
-        ".github/dependabot.yml",
-        ".github/dependabot.yaml",
-        "renovate.json",
-        ".github/renovate.json",
-        "renovate.json5",
-    )
+    return repo.exists(*DEPS_BOT_FILES)
 
 
 def dependency_cooldown(repo: Repo) -> bool:
-    texts = [
-        (repo.root / p).read_text(encoding="utf-8")
-        for p in (
-            ".github/dependabot.yml",
-            ".github/dependabot.yaml",
-            "renovate.json",
-            ".github/renovate.json",
-            "renovate.json5",
-        )
-        if (repo.root / p).exists()
-    ]
-    return any("cooldown" in t or "minimumReleaseAge" in t for t in texts)
+    for name in DEPS_BOT_FILES:
+        path = repo.root / name
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8")
+        if "dependabot" in name:
+            if re.search(r"^\s*(?:-\s*)?cooldown\s*:", YAML_COMMENT.sub(r"\1", text), re.M):
+                return True
+        elif re.search(r"""^[^/\n]*["']?minimumReleaseAge["']?\s*:""", text, re.MULTILINE):
+            return True
+    return False
 
 
 def actions_pinned(repo: Repo) -> bool:
-    refs = [u for u in USES.findall(_all_text(repo)) if not u.startswith(("./", "$/", "docker://"))]
+    refs = [u for u in _refs(repo) if not u.startswith(("./", "$/", "docker://"))]
     return all(SHA_REF.search(u) for u in refs)
 
 
+def top_level_permissions(text: str) -> str:
+    """The workflow-level `permissions:` value (inline or block), or "" if undeclared."""
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if m := re.match(r"permissions:(.*)$", line):
+            if m[1].strip():
+                return m[1].strip()
+            block = []
+            for nxt in lines[i + 1 :]:
+                if nxt.strip() and not nxt[0].isspace():
+                    break
+                block.append(nxt.strip())
+            return "\n".join(b for b in block if b)
+    return ""
+
+
 def least_privilege(repo: Repo) -> bool:
+    """Every workflow defaults to a read-only token; write scopes go on single jobs."""
     files = repo.workflows()
-    return bool(files) and all(re.search(r"^permissions:", t, re.MULTILINE) for t in files.values())
+    tops = [top_level_permissions(t) for t in files.values()]
+    return bool(files) and all(
+        top and top != "write-all" and not re.search(r":\s*write\b", top) for top in tops
+    )
+
+
+def gates_enabled(repo: Repo) -> bool:
+    """Callers may not switch gates off; a time-boxed waiver in golden.toml is the way."""
+    return not any(
+        GOLDEN_WORKFLOW.search(t) and DISABLED_GATE.search(t) for t in repo.workflows().values()
+    )
 
 
 def provenance(repo: Repo) -> bool:
-    text = _all_text(repo)
-    return "container.yml" in text or "actions/attest" in text
+    return any(
+        "actions/attest" in u or u.split("@")[0].endswith("/.github/workflows/container.yml")
+        for u in _refs(repo)
+    )
 
 
 def ossf_scorecard(repo: Repo) -> bool:
-    return "ossf/scorecard-action" in _all_text(repo)
+    return any(u.startswith("ossf/scorecard-action@") for u in _refs(repo))
 
 
 def no_active_waivers(repo: Repo) -> bool:
@@ -158,6 +214,27 @@ def reviews_required(repo: Repo) -> bool | None:
         return None
     rule = repo.rule("pull_request") or {}
     return int(rule.get("parameters", {}).get("required_approving_review_count", 0)) >= 1
+
+
+def owned(repo: Repo, path: str) -> bool:
+    """CODEOWNERS assigns `path` to someone (the last matching pattern wins)."""
+    file = next((repo.root / c for c in CODEOWNERS if (repo.root / c).exists()), None)
+    owners: list[str] = []
+    for line in file.read_text(encoding="utf-8").splitlines() if file else []:
+        pattern, *who = line.split("#", 1)[0].split() or [""]
+        if pattern and match(path, "./" + pattern[1:] if pattern.startswith("/") else pattern):
+            owners = who
+    return bool(owners)
+
+
+def owner_review(repo: Repo) -> bool | None:
+    """Changes to workflows and golden.toml need a code owner, so no PR weakens its own gate."""
+    if repo.rules is None:
+        return None
+    rule = repo.rule("pull_request") or {}
+    if not rule.get("parameters", {}).get("require_code_owner_review"):
+        return False
+    return owned(repo, ".github/workflows/ci.yml") and owned(repo, repo.policy_path)
 
 
 def history_protected(repo: Repo) -> bool | None:
@@ -185,9 +262,13 @@ CONTROLS: tuple[Control, ...] = (
     ),
     Control("required-check", 3, "Ruleset requires the golden check", golden_check_required),
     Control("reviews", 3, "Ruleset requires an approving review", reviews_required),
+    Control(
+        "owner-review", 3, "Code owners must approve workflow and policy changes", owner_review
+    ),
     Control("history", 3, "Ruleset blocks force-push and deletion", history_protected),
     Control("pinned", 3, "Every third-party action pinned to a commit SHA", actions_pinned),
     Control("permissions", 3, "Workflows declare least-privilege permissions", least_privilege),
+    Control("gates-on", 3, "No gate switched off in the caller workflow", gates_enabled),
     Control("cooldown", 3, "Dependency updates wait out a cooldown", dependency_cooldown),
     Control("provenance", 4, "Release artifacts carry signed provenance", provenance),
     Control("ossf", 4, "OpenSSF Scorecard runs", ossf_scorecard),

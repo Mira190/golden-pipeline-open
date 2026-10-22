@@ -7,7 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from golden import cli
+from golden import cli, config
+from golden.report import annotate
 
 PRICING = "def total(a, b):\n    if a > b:\n        return a\n    return b\n"
 COBERTURA = """<?xml version="1.0" ?>
@@ -74,7 +75,8 @@ def test_changed(repo, feature, capsys):
         {"tests/test_pricing.py": "x", "golden.toml": '[presence]\nexempt = ["pkg/__init__.py"]\n'}
     )
     for kind, expected in [
-        ("sources", "pkg/pricing.py"),
+        # An exemption the change itself adds applies only after merge.
+        ("sources", "pkg/__init__.py pkg/pricing.py"),
         ("tests", "tests/test_pricing.py"),
         ("mutation-targets", "pkg.pricing.x_total__mutmut_*"),
     ]:
@@ -265,7 +267,7 @@ def test_summary_file(repo, monkeypatch, capsys):
     assert "no mutants" in summary.read_text()
 
 
-def test_active_waiver_turns_failure_into_warning(repo, feature, capsys):
+def test_active_waiver_turns_failure_into_warning(merged, repo, feature, capsys):
     expires = dt.datetime.now(dt.UTC).date() + dt.timedelta(days=30)
     (repo.root / "golden.toml").write_text(
         f'[waivers.test-presence]\nreason = "spike JIRA-1"\nexpires = {expires}\n'
@@ -274,6 +276,14 @@ def test_active_waiver_turns_failure_into_warning(repo, feature, capsys):
     out = capsys.readouterr().out
     assert f"::warning::test-presence is waived until {expires}: spike JIRA-1" in out
     assert "failed (waived)" in out
+
+
+@pytest.fixture
+def merged(monkeypatch):
+    """Treat the working-tree golden.toml as already merged on the base branch."""
+    monkeypatch.setattr(
+        config, "read_at", lambda base, path: path.read_text() if path.exists() else None
+    )
 
 
 def fake_diff_cover(monkeypatch, data, markdown="report"):
@@ -293,7 +303,9 @@ def fake_diff_cover(monkeypatch, data, markdown="report"):
     ("percent", "lines", "code"),
     [(90, 10, 0), (89.99, 10, 1), (0, 0, 0)],
 )
-def test_diff_coverage_threshold_is_inclusive(repo, monkeypatch, capsys, percent, lines, code):
+def test_diff_coverage_threshold_is_inclusive(
+    repo, merged, monkeypatch, capsys, percent, lines, code
+):
     fake_diff_cover(
         monkeypatch, {"total_percent_covered": percent, "total_num_lines": lines, "src_stats": {}}
     )
@@ -303,7 +315,7 @@ def test_diff_coverage_threshold_is_inclusive(repo, monkeypatch, capsys, percent
     assert "<details><summary>Report</summary>\n\nreport\n</details>" in out
 
 
-def test_diff_coverage_caps_annotations_per_file(repo, monkeypatch, capsys):
+def test_diff_coverage_caps_annotations_per_file(repo, merged, monkeypatch, capsys):
     fake_diff_cover(
         monkeypatch,
         {
@@ -319,7 +331,7 @@ def test_diff_coverage_caps_annotations_per_file(repo, monkeypatch, capsys):
     assert "line=51::" not in out
 
 
-def test_diff_coverage_waiver(repo, monkeypatch, capsys):
+def test_diff_coverage_waiver(repo, merged, monkeypatch, capsys):
     expires = dt.datetime.now(dt.UTC).date() + dt.timedelta(days=5)
     (repo.root / "golden.toml").write_text(
         f'[waivers.diff-coverage]\nreason = "legacy"\nexpires = {expires}\n'
@@ -329,10 +341,128 @@ def test_diff_coverage_waiver(repo, monkeypatch, capsys):
     assert "diff-coverage is waived" in capsys.readouterr().out
 
 
-def test_diff_coverage_failure_when_tool_exits_nonzero(repo, monkeypatch, capsys):
+def test_diff_coverage_failure_when_tool_exits_nonzero(repo, merged, monkeypatch, capsys):
     def run(argv, **kwargs):
         return subprocess.CompletedProcess(argv, 1, "out", "err")
 
     monkeypatch.setattr(cli.subprocess, "run", run)
     assert cli.main(["diff-coverage", "--base", "x", "coverage.xml"]) == 1
     assert "#### ❌ Diff coverage: failed" in capsys.readouterr().out
+
+
+def test_annotation_properties_are_escaped(capsys):
+    annotate("error", "50% done\nnext", file="a,b:c.py", line=3)
+    assert capsys.readouterr().out == "::error file=a%2Cb%3Ac.py,line=3::50%25 done%0Anext\n"
+
+
+def pull_request(repo, monkeypatch, base):
+    event = repo.root / "event.json"
+    event.write_text(json.dumps({"pull_request": {"base": {"sha": base}, "labels": []}}))
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event))
+
+
+def test_policy_check_judges_a_pull_request_by_the_merged_policy(repo, monkeypatch, capsys):
+    repo.commit({"golden.toml": "[coverage]\ndiff_min = 95\n"})
+    pull_request(repo, monkeypatch, repo.git("rev-parse", "HEAD"))
+    (repo.root / "golden.toml").write_text("[coverage]\ndiff_min = 85\n")
+    assert cli.main(["policy", "check"]) == 0
+    out = capsys.readouterr().out
+    assert "| `coverage.diff_min` | 95 | 80 |" in out
+    assert "::notice::golden.toml: coverage.diff_min = 85 applies after merge (now 95)" in out
+    assert "**Not applied to this change**\n\n- coverage.diff_min = 85 applies" in out
+    assert cli.main(["policy", "get", "coverage.diff_min"]) == 0
+    assert capsys.readouterr().out.strip() == "95"
+
+
+def test_policy_check_without_deferrals(repo, capsys):
+    assert cli.main(["policy", "check"]) == 0
+    out = capsys.readouterr().out
+    assert "Not applied" not in out
+    assert "::notice" not in out
+
+
+def test_gates_use_the_policy_at_base(repo, capsys):
+    repo.commit({"golden.toml": '[presence]\nexempt = ["gen/**"]\n'})
+    base = repo.git("rev-parse", "HEAD")
+    repo.commit(
+        {
+            "golden.toml": '[presence]\nexempt = ["gen/**", "pkg/**"]\n',
+            "gen/x.py": "X = 1\n",
+            "pkg/y.py": "Y = 1\n",
+        }
+    )
+    assert cli.main(["presence", "--base", base, "--preset", "python"]) == 1
+    out = capsys.readouterr().out
+    assert "::error file=pkg/y.py::missing tests" in out
+    assert "gen/x.py" not in out
+
+
+def test_ratchet_reads_the_base_from_the_event(repo, monkeypatch, capsys):
+    repo.commit({"golden.toml": "[coverage]\nratchet_tolerance = 0\n"})
+    pull_request(repo, monkeypatch, repo.git("rev-parse", "HEAD"))
+    (repo.root / "golden.toml").write_text("[coverage]\nratchet_tolerance = 2\n")
+    (repo.root / "base.json").write_text('{"line_percent": 76}')
+    cobertura(repo, {1, 2, 3})
+    assert cli.main(["ratchet", "coverage.xml", "--baseline", "base.json"]) == 1
+    assert "tolerance 0 pp" in capsys.readouterr().out
+
+
+def test_unreadable_base_fails_closed(repo, monkeypatch, capsys):
+    repo.commit({"README.md": "x"})
+    pull_request(repo, monkeypatch, "0" * 40)
+    assert cli.main(["policy", "check"]) == 2
+    assert "cannot read the merged policy" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(("content", "message"), [("{}", "no line_percent"), ("[", "Expecting")])
+def test_ratchet_corrupt_baseline_exits_2(repo, capsys, content, message):
+    cobertura(repo, {1, 2, 3})
+    (repo.root / "base.json").write_text(content)
+    assert cli.main(["ratchet", "coverage.xml", "--baseline", "base.json"]) == 2
+    assert message in capsys.readouterr().out
+
+
+def test_mutation_accepts_the_elements_format(repo, capsys):
+    report = {
+        "files": {
+            "a.cs": {
+                "mutants": [
+                    {"status": "Survived", "mutatorName": "M", "location": {"start": {"line": 2}}}
+                ]
+            }
+        }
+    }
+    (repo.root / "m.json").write_text(json.dumps(report))
+    assert cli.main(["mutation", "m.json", "--format", "mutation-testing-elements"]) == 1
+    assert "- `a.cs:2` M" in capsys.readouterr().out
+
+
+def test_scorecard_checks_ownership_of_the_policy_in_use(repo, capsys, monkeypatch):
+    (repo.root / ".github").mkdir()
+    (repo.root / ".github" / "CODEOWNERS").write_text("/.github/ @t\n/svc/golden.toml @t\n")
+    (repo.root / "svc").mkdir()
+    rules = [{"type": "pull_request", "parameters": {"require_code_owner_review": True}}]
+    monkeypatch.setattr(cli.sc, "rules_from_env", lambda: rules)
+    monkeypatch.chdir(repo.root / "svc")
+    cli.main(["scorecard", "--root", str(repo.root)])
+    row = "| L3 | Code owners must approve workflow and policy changes | ✅ |"
+    assert row in capsys.readouterr().out
+
+
+def test_dora_names_the_bad_line(repo, capsys):
+    log = repo.root / "deploys.jsonl"
+    log.write_text("{}\n")
+    assert cli.main(["dora", str(log)]) == 2
+    out = capsys.readouterr().out
+    assert "::error::golden dora: line 1: missing committed_at, deployed_at, failed" in out
+
+
+def test_unrelated_history_is_a_git_error(repo, capsys):
+    # A shallow or orphaned checkout has no merge base: fail closed, never "no changes".
+    repo.commit({"a.py": "x = 1\n"})
+    base = repo.git("rev-parse", "HEAD")
+    repo.git("checkout", "-q", "--orphan", "other")
+    repo.commit({"b.py": "y = 1\n"})
+    assert cli.main(["presence", "--base", base, "--preset", "python"]) == 2
+    assert "::error::golden presence:" in capsys.readouterr().out

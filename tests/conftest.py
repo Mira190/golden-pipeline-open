@@ -35,3 +35,11 @@ def repo(tmp_path, monkeypatch) -> GitRepo:
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
     return GitRepo(tmp_path)
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_github_event(monkeypatch):
+    """Tests must not pick up the event of the CI run executing them (its base commit
+    does not exist in a test repository)."""
+    monkeypatch.delenv("GITHUB_EVENT_NAME", raising=False)
+    monkeypatch.delenv("GITHUB_EVENT_PATH", raising=False)

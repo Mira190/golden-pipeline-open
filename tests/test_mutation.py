@@ -127,7 +127,7 @@ def test_filter_to_changed_lines(tmp_path, lines, score):
     assert mutation.evaluate(path, "gremlins", lines)[0].score == score
 
 
-@pytest.mark.parametrize("fmt", mutation.FORMATS)
+@pytest.mark.parametrize("fmt", mutation.PARSERS)
 def test_missing_report_fails_closed(tmp_path, fmt):
     with pytest.raises(FileNotFoundError, match="did the mutation tool run"):
         mutation.evaluate(tmp_path / "nope.json", fmt)
@@ -138,3 +138,57 @@ def test_missing_report_fails_closed(tmp_path, fmt):
 )
 def test_empty_report_has_no_score(tmp_path, fmt, data):
     assert mutation.evaluate(write(tmp_path, data), fmt)[0].score is None
+
+
+def test_formats():
+    assert set(mutation.PARSERS) == {"gremlins", "mutation-testing-elements", "mutmut", "stryker"}
+
+
+@pytest.mark.parametrize("fmt", ["stryker", "mutation-testing-elements"])
+def test_elements_report_with_absolute_paths(tmp_path, monkeypatch, fmt):
+    monkeypatch.chdir(tmp_path)
+    data = stryker("Survived", "Killed")
+    data["files"] = {"/build/proj/src/a.ts": data["files"]["src/a.ts"]}
+    data["projectRoot"] = "/build/proj"
+    tally, lived = mutation.evaluate(write(tmp_path, data), fmt, {"src/a.ts": [(1, 1)]})
+    assert (tally.survived, tally.killed) == (1, 0)
+    assert lived == [mutation.Mutant("src/a.ts", 1, mutation.SURVIVED, "Arith")]
+
+
+def test_absolute_paths_relative_to_working_directory(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    data = stryker("Survived")
+    data["files"] = {f"{tmp_path}/src/a.ts": data["files"]["src/a.ts"]}
+    tally, _ = mutation.evaluate(write(tmp_path, data), "stryker", {"src/a.ts": [(1, 1)]})
+    assert tally.survived == 1
+
+
+@pytest.mark.parametrize(
+    ("name", "root", "expected"),
+    [
+        ("src/a.ts", "/p", "src/a.ts"),
+        ("/p/src/a.ts", "/p", "src/a.ts"),
+        ("/p/src/a.ts", None, "/p/src/a.ts"),
+        ("/elsewhere/a.ts", "/p", "/elsewhere/a.ts"),
+    ],
+)
+def test_relative(tmp_path, monkeypatch, name, root, expected):
+    monkeypatch.chdir(tmp_path)
+    assert mutation._relative(name, root) == expected
+
+
+@pytest.mark.parametrize(
+    ("fmt", "data"),
+    [
+        ("stryker", {"files": {"a.ts": {"mutants": [{"status": "Survived"}]}}}),
+        ("stryker", {"files": {"a.ts": {"mutants": [{"location": {"start": {"line": 1}}}]}}}),
+        ("stryker", {"files": []}),
+        ("gremlins", {"files": [{"mutations": [{"line": 1, "status": "LIVED"}]}]}),
+        ("gremlins", {"files": [{"file_name": "a.go", "mutations": [{"line": "x"}]}]}),
+        ("mutmut", {"killed": "many"}),
+        ("mutmut", []),
+    ],
+)
+def test_malformed_report_fails_closed(tmp_path, fmt, data):
+    with pytest.raises(ValueError, match=f"malformed {fmt} report"):
+        mutation.evaluate(write(tmp_path, data), fmt)

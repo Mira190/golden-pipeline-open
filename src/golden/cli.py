@@ -23,7 +23,13 @@ from golden.report import annotate, summary, verdict
 
 
 def _policy(args: argparse.Namespace) -> config.Policy:
-    return config.load(args.policy)
+    """The policy this run is judged by, anchored to the change's base commit.
+
+    The base comes from `--base` or, inside Actions, from the triggering event, so
+    a pull request is always judged by the merged golden.toml, never its own edit.
+    """
+    base = getattr(args, "base", None) or plan.Event.from_env().base()
+    return config.load(args.policy, base=base)
 
 
 def _waived(policy: config.Policy, gate: str) -> bool:
@@ -42,9 +48,13 @@ def cmd_policy(args: argparse.Namespace) -> int:
         return 0
     rows = [f"| `{k}` | {v:g} | {config.BOUNDS[k].floor:g} |" for k, v in policy.values.items()]
     waivers = [f"- **{w.gate}** until {w.expires}: {w.reason}" for w in policy.waivers.values()]
+    deferred = [f"- {note}" for note in policy.deferred]
+    for note in policy.deferred:
+        annotate("notice", f"golden.toml: {note}")
     summary(
         "\n".join(["### Golden policy", "", "| Key | Value | Floor |", "|---|---|---|", *rows])
         + ("\n\n**Waivers**\n\n" + "\n".join(waivers) if waivers else "")
+        + ("\n\n**Not applied to this change**\n\n" + "\n".join(deferred) if deferred else "")
     )
     return 0
 
@@ -69,7 +79,7 @@ def cmd_changed(args: argparse.Namespace) -> int:
     changed = gitdiff.changed_files(args.base)
     sources = [p for p in changed if preset.is_source(p) and not match_any(p, policy.exempt)]
     if args.kind == "tests":
-        selected = [p for p in changed if preset.is_test(p)]
+        selected = [p for p in changed if preset.is_runnable_test(p)]
     elif args.kind == "sources":
         selected = sources
     else:
@@ -220,7 +230,8 @@ def cmd_mutation(args: argparse.Namespace) -> int:
 # ----------------------------------------------------------------- scorecard
 def cmd_scorecard(args: argparse.Namespace) -> int:
     policy = _policy(args)
-    repo = sc.Repo(args.root, policy, sc.rules_from_env())
+    policy_path = Path(os.path.relpath(args.policy.resolve(), args.root.resolve())).as_posix()
+    repo = sc.Repo(args.root, policy, sc.rules_from_env(), policy_path)
     results = sc.evaluate(repo)
     reached = sc.level(results)
     if args.json:
@@ -239,8 +250,7 @@ def cmd_scorecard(args: argparse.Namespace) -> int:
 
 # ----------------------------------------------------------------- dora
 def cmd_dora(args: argparse.Namespace) -> int:
-    lines = args.log.read_text(encoding="utf-8").splitlines()
-    result = dora.compute([json.loads(line) for line in lines if line.strip()])
+    result = dora.compute(dora.parse_log(args.log.read_text(encoding="utf-8")))
     print(json.dumps(asdict(result), indent=2))
     return 0
 
@@ -288,7 +298,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("mutation", help="gate: mutation score meets policy")
     p.add_argument("report", type=Path)
-    p.add_argument("--format", choices=mutation.FORMATS, required=True)
+    p.add_argument("--format", choices=sorted(mutation.PARSERS), required=True)
     p.add_argument("--base", help="only count mutants on lines changed since BASE")
     p.set_defaults(func=cmd_mutation)
 

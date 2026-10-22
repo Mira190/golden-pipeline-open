@@ -1,4 +1,5 @@
 import datetime as dt
+from pathlib import Path
 
 import pytest
 
@@ -115,3 +116,172 @@ def test_load_invalid_toml(tmp_path):
     path.write_text("[mutation\n")
     with pytest.raises(config.PolicyError, match=r"golden\.toml"):
         config.load(path, TODAY)
+
+
+@pytest.mark.parametrize(
+    ("data", "message"),
+    [
+        ({"coverage": {"diff_minimum": 99}}, r"unknown key\(s\) coverage.diff_minimum"),
+        ({"presence": {"exempts": []}}, r"unknown key\(s\) presence.exempts"),
+        ({"coverage": 95}, r"coverage must be a table"),
+        ({"waivers": {"mutation": "later"}}, r"waivers.mutation must be a table"),
+        ({"waivers": []}, r"waivers must be a table"),
+        (
+            {"waivers": {"mutation": {"reason": "x", "expires": TODAY, "owner": "me"}}},
+            r"waiver for mutation: unknown key\(s\) owner",
+        ),
+        ({"mutation": {"min_score": float("nan")}}, "must be a finite number"),
+        ({"coverage": {"diff_min": float("inf")}}, "must be a finite number"),
+        ({"flaky": {"repeats": 4.5}}, "flaky.repeats must be a whole number"),
+        ({"scorecard": {"min_level": 2.5}}, "scorecard.min_level must be a whole number"),
+        ({"scorecard": {"min_level": 5}}, r"min_level = 5 can never pass \(<= 4\)"),
+        ({"coverage": {"diff_min": 100.5}}, r"diff_min = 100.5 can never pass \(<= 100\)"),
+        ({"mutation": {"min_score": 101}}, "mutation.min_score = 101 can never pass"),
+        ({"flaky": {"repeats": 101}}, "flaky.repeats = 101 can never pass"),
+        ({"coverage": {"ratchet_tolerance": -0.1}}, r"-0.1 can never pass \(>= 0\)"),
+    ],
+)
+def test_policy_fails_closed_on_mistakes(data, message):
+    with pytest.raises(config.PolicyError, match=message):
+        load(data)
+
+
+def test_strictest_values_are_allowed():
+    policy = load(
+        {
+            "coverage": {"diff_min": 100, "ratchet_tolerance": 0},
+            "mutation": {"min_score": 100},
+            "flaky": {"repeats": 100},
+            "scorecard": {"min_level": 4},
+        }
+    )
+    assert policy.get("flaky.repeats") == 100
+    assert policy.get("scorecard.min_level") == 4
+
+
+def test_waiver_expiry_must_be_a_date_not_a_datetime():
+    spec = {"reason": "x", "expires": dt.datetime(2026, 11, 1, tzinfo=dt.UTC)}
+    with pytest.raises(config.PolicyError, match="needs `expires"):
+        load({"waivers": {"mutation": spec}})
+
+
+@pytest.mark.parametrize(
+    ("key", "a", "b", "stricter"),
+    [
+        ("coverage.diff_min", 85, 95, 95),
+        ("coverage.diff_min", 95, 85, 95),
+        ("coverage.ratchet_tolerance", 0.2, 2, 0.2),
+        ("coverage.ratchet_tolerance", 2, 0.2, 0.2),
+    ],
+)
+def test_bound_stricter(key, a, b, stricter):
+    assert config.BOUNDS[key].stricter(a, b) == stricter
+
+
+def test_merge_tightens_but_never_loosens():
+    base = load(
+        {
+            "coverage": {"diff_min": 95, "ratchet_tolerance": 0.2},
+            "presence": {"exempt": ["gen/**", "old/**"]},
+            "waivers": {
+                "mutation": {"reason": "merged", "expires": dt.date(2026, 11, 10)},
+                "scorecard": {"reason": "merged", "expires": dt.date(2026, 11, 30)},
+                "diff-coverage": {"reason": "merged", "expires": dt.date(2026, 11, 30)},
+            },
+        }
+    )
+    head = load(
+        {
+            "coverage": {"diff_min": 85, "ratchet_tolerance": 0.1},
+            "mutation": {"min_score": 90},
+            "presence": {"exempt": ["gen/**", "new/**"]},
+            "waivers": {
+                "mutation": {"reason": "extended", "expires": dt.date(2026, 12, 20)},
+                "scorecard": {"reason": "shortened", "expires": dt.date(2026, 11, 1)},
+                "test-presence": {"reason": "new", "expires": dt.date(2026, 11, 1)},
+            },
+        }
+    )
+    policy = config.merge(base, head)
+    assert policy.values == {
+        "coverage.diff_min": 95,
+        "coverage.ratchet_tolerance": 0.1,
+        "mutation.min_score": 90,
+        "flaky.repeats": 10,
+        "scorecard.min_level": 2,
+    }
+    assert policy.exempt == ("gen/**",)
+    # Extending keeps the merged expiry; shortening applies now; removing applies now.
+    assert policy.waivers == {
+        "mutation": config.Waiver("mutation", "merged", dt.date(2026, 11, 10)),
+        "scorecard": config.Waiver("scorecard", "shortened", dt.date(2026, 11, 1)),
+    }
+    assert policy.deferred == (
+        "coverage.diff_min = 85 applies after merge (now 95)",
+        "presence.exempt 'new/**' applies after merge",
+        "waiver for test-presence applies after merge",
+    )
+
+
+def test_merge_of_identical_policies_defers_nothing():
+    policy = load({"coverage": {"diff_min": 95}})
+    assert config.merge(policy, policy) == policy
+
+
+@pytest.fixture
+def history(repo):
+    """A repository whose base commit holds golden.toml (diff_min = 95)."""
+    repo.commit({"golden.toml": "[coverage]\ndiff_min = 95\n"})
+    base = repo.git("rev-parse", "HEAD")
+    repo.git("checkout", "-qb", "pr")
+    return base
+
+
+def test_load_anchored_to_base(repo, history):
+    (repo.root / "golden.toml").write_text("[coverage]\ndiff_min = 85\n")
+    policy = config.load(Path("golden.toml"), TODAY, base=history)
+    assert policy.get("coverage.diff_min") == 95
+    assert policy.deferred == ("coverage.diff_min = 85 applies after merge (now 95)",)
+    assert config.load(Path("golden.toml"), TODAY).get("coverage.diff_min") == 85
+
+
+def test_deleting_the_policy_does_not_loosen_it(repo, history):
+    (repo.root / "golden.toml").unlink()
+    assert config.load(Path("golden.toml"), TODAY, base=history).get("coverage.diff_min") == 95
+
+
+def test_policy_added_by_the_change_can_only_tighten(repo):
+    repo.commit({"README.md": "x"})
+    base = repo.git("rev-parse", "HEAD")
+    (repo.root / "golden.toml").write_text(
+        "[coverage]\ndiff_min = 85\n[mutation]\nmin_score = 90\n"
+    )
+    policy = config.load(Path("golden.toml"), TODAY, base=base)
+    assert policy.get("coverage.diff_min") == 90
+    assert policy.get("mutation.min_score") == 90
+
+
+def test_read_at(repo, history):
+    assert config.read_at(history, Path("golden.toml")) == "[coverage]\ndiff_min = 95\n"
+    assert config.read_at(history, Path("nope.toml")) is None
+    assert config.read_at(history, (repo.root / "golden.toml").resolve()) is not None
+    with pytest.raises(config.PolicyError, match="cannot read the merged policy"):
+        config.read_at("0" * 40, Path("golden.toml"))
+
+
+def test_invalid_merged_policy_falls_back_to_the_change(repo):
+    # A floor raised by a platform upgrade makes the merged file invalid; the PR
+    # that repairs it must be judged by its own (valid) policy.
+    repo.commit({"golden.toml": "[coverage]\ndiff_min = 50\n"})
+    base = repo.git("rev-parse", "HEAD")
+    (repo.root / "golden.toml").write_text("[coverage]\ndiff_min = 92\n")
+    policy = config.load(Path("golden.toml"), TODAY, base=base)
+    assert policy.get("coverage.diff_min") == 92
+    assert len(policy.deferred) == 1
+    assert policy.deferred[0].startswith("merged policy ignored: coverage.diff_min = 50")
+
+
+def test_invalid_change_policy_is_an_error_even_with_a_base(repo, history):
+    (repo.root / "golden.toml").write_text("[coverage]\ndiff_min = 50\n")
+    with pytest.raises(config.PolicyError, match="weaker than the platform floor"):
+        config.load(Path("golden.toml"), TODAY, base=history)

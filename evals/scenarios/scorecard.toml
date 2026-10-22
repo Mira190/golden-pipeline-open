@@ -1,0 +1,126 @@
+# Repository scorecard controls, asserted on the rows of the control table.
+# Branch rules need the GitHub API, so they read "unknown" offline.
+
+[[scenario]]
+id = "scorecard/pull-request-target-is-not-pr-ci"
+gate = "scorecard"
+category = "gaming"
+why = "pull_request_target runs base-branch code with secrets; it is not 'CI on pull requests'."
+argv = ["scorecard", "--root", "{root}"]
+stdout_contains = ["| L1 | CI runs on pull requests | ❌ |"]
+[scenario.head]
+".github/workflows/ci.yml" = "on:\n  pull_request_target:\npermissions: {}\njobs: {}\n"
+
+[[scenario]]
+id = "scorecard/inline-on-list-is-pr-ci"
+gate = "scorecard"
+category = "legit"
+why = "`on: [push, pull_request]` is the most common short form."
+argv = ["scorecard", "--root", "{root}"]
+stdout_contains = ["| L1 | CI runs on pull requests | ✅ |"]
+[scenario.head]
+".github/workflows/ci.yml" = "on: [push, pull_request]\npermissions: {}\njobs: {}\n"
+
+[[scenario]]
+id = "scorecard/provenance-in-a-comment"
+gate = "scorecard"
+category = "gaming"
+why = "A comment that mentions container.yml is not signed provenance."
+argv = ["scorecard", "--root", "{root}"]
+stdout_contains = ["| L4 | Release artifacts carry signed provenance | ❌ |"]
+[scenario.head]
+".github/workflows/ci.yml" = "on: pull_request\npermissions: {}\n# TODO: call container.yml and actions/attest one day\njobs: {}\n"
+
+[[scenario]]
+id = "scorecard/ossf-in-a-comment"
+gate = "scorecard"
+category = "gaming"
+why = "A comment that mentions ossf/scorecard-action does not run it."
+argv = ["scorecard", "--root", "{root}"]
+stdout_contains = ["| L4 | OpenSSF Scorecard runs | ❌ |"]
+[scenario.head]
+".github/workflows/ci.yml" = "on: pull_request\npermissions: {}\n# see ossf/scorecard-action\njobs: {}\n"
+
+[[scenario]]
+id = "scorecard/cooldown-in-a-comment"
+gate = "scorecard"
+category = "gaming"
+why = "A commented-out cooldown block does not delay anything."
+argv = ["scorecard", "--root", "{root}"]
+stdout_contains = ["| L3 | Dependency updates wait out a cooldown | ❌ |"]
+[scenario.head]
+".github/dependabot.yml" = "version: 2\nupdates:\n  - package-ecosystem: pip\n    directory: /\n    schedule:\n      interval: weekly\n    # cooldown:\n    #   default-days: 7\n"
+
+[[scenario]]
+id = "scorecard/dependabot-cooldown"
+gate = "scorecard"
+category = "legit"
+why = "Baseline: a real Dependabot cooldown."
+argv = ["scorecard", "--root", "{root}"]
+stdout_contains = ["| L3 | Dependency updates wait out a cooldown | ✅ |"]
+[scenario.head]
+".github/dependabot.yml" = "version: 2\nupdates:\n  - package-ecosystem: pip\n    directory: /\n    schedule:\n      interval: weekly\n    cooldown:\n      default-days: 7\n"
+
+[[scenario]]
+id = "scorecard/renovaterc"
+gate = "scorecard"
+category = "legit"
+why = "Renovate also reads .renovaterc.json; its minimumReleaseAge is a cooldown."
+argv = ["scorecard", "--root", "{root}"]
+stdout_contains = [
+  "| L2 | Automated dependency updates | ✅ |",
+  "| L3 | Dependency updates wait out a cooldown | ✅ |",
+]
+[scenario.head]
+".renovaterc.json" = '{"extends": ["config:recommended"], "minimumReleaseAge": "7 days"}'
+
+[[scenario]]
+id = "scorecard/write-all-is-not-least-privilege"
+gate = "scorecard"
+category = "gaming"
+why = "`permissions: write-all` is declared, but it is the opposite of least privilege."
+argv = ["scorecard", "--root", "{root}"]
+stdout_contains = ["| L3 | Workflows declare least-privilege permissions | ❌ |"]
+[scenario.head]
+".github/workflows/ci.yml" = "on: pull_request\npermissions: write-all\njobs: {}\n"
+
+[[scenario]]
+id = "scorecard/top-level-write-scope"
+gate = "scorecard"
+category = "gaming"
+why = "A top-level `contents: write` hands every job a write token."
+argv = ["scorecard", "--root", "{root}"]
+stdout_contains = ["| L3 | Workflows declare least-privilege permissions | ❌ |"]
+[scenario.head]
+".github/workflows/ci.yml" = "on: pull_request\npermissions:\n  contents: write\njobs: {}\n"
+
+[[scenario]]
+id = "scorecard/job-level-write-is-fine"
+gate = "scorecard"
+category = "legit"
+why = "Read-only by default with a write scope granted to one job is least privilege."
+argv = ["scorecard", "--root", "{root}"]
+stdout_contains = ["| L3 | Workflows declare least-privilege permissions | ✅ |"]
+[scenario.head]
+".github/workflows/ci.yml" = "on: pull_request\npermissions:\n  contents: read\njobs:\n  release:\n    permissions:\n      contents: write\n    runs-on: ubuntu-24.04\n    steps: []\n"
+
+[[scenario]]
+id = "scorecard/gate-disabled-in-caller"
+gate = "scorecard"
+category = "gaming"
+why = "The caller workflow switches mutation testing off; policy-as-code is bypassed without a waiver."
+argv = ["scorecard", "--root", "{root}"]
+stdout_contains = ["| L3 | No gate switched off in the caller workflow | ❌ |"]
+[scenario.head]
+".github/workflows/ci.yml" = "on: pull_request\npermissions: {}\njobs:\n  ci:\n    uses: o/golden-pipeline-open/.github/workflows/golden.yml@0123456789abcdef0123456789abcdef01234567\n    with:\n      language: python\n      mutation: false\n"
+
+[[scenario]]
+id = "scorecard/lockfile-only-in-node-modules"
+gate = "scorecard"
+category = "gaming"
+why = "A lockfile inside a vendored dependency does not lock this project."
+argv = ["scorecard", "--root", "{root}"]
+stdout_contains = ["| L1 | Dependencies are locked | ❌ |"]
+[scenario.head]
+"package.json" = "{}\n"
+"node_modules/left-pad/package-lock.json" = "{}\n"

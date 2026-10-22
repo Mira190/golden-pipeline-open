@@ -1,0 +1,119 @@
+# Flake gate: changed tests are re-run N times; one failure blocks.
+#
+# Scenarios with `flake = N` run the real thing: `golden changed --kind tests`
+# selects what the workflow would re-run, then pytest runs it N times (the step
+# is skipped when nothing is selected, as in golden.yml).
+
+[[scenario]]
+id = "flake/stable-new-test"
+gate = "flake"
+category = "legit"
+why = "A deterministic new test passes every re-run."
+argv = ["changed", "--base", "{base}", "--preset", "python", "--kind", "tests"]
+flake = 5
+expect = "pass"
+[scenario.base]
+"billing/__init__.py" = ""
+"billing/tax.py" = "def rate():\n    return 0.1\n"
+[scenario.head]
+"billing/tax.py" = "def rate():\n    return 0.2\n"
+"tests/test_tax.py" = "from billing.tax import rate\n\n\ndef test_rate():\n    assert rate() == 0.2\n"
+
+[[scenario]]
+id = "flake/leaked-state"
+gate = "flake"
+category = "gaming"
+why = "The test passes once, then fails because it leaks state to disk (Luo et al.: order dependency)."
+argv = ["changed", "--base", "{base}", "--preset", "python", "--kind", "tests"]
+flake = 5
+expect = "block"
+[scenario.base]
+"billing/__init__.py" = ""
+"billing/tax.py" = "def rate():\n    return 0.1\n"
+[scenario.head]
+"billing/tax.py" = "def rate():\n    return 0.2\n"
+"tests/test_tax.py" = '''
+from pathlib import Path
+
+from billing.tax import rate
+
+MARK = Path(__file__).with_name(".ran-once")
+
+
+def test_rate():
+    first = not MARK.exists()
+    MARK.write_text("x")
+    assert first
+    assert rate() == 0.2
+'''
+
+[[scenario]]
+id = "flake/conftest-only"
+gate = "flake"
+category = "legit"
+why = "Only tests/conftest.py changed; pytest on a conftest collects nothing and exits 5."
+argv = ["changed", "--base", "{base}", "--preset", "python", "--kind", "tests"]
+flake = 5
+expect = "pass"
+[scenario.base]
+"billing/__init__.py" = ""
+"billing/tax.py" = "def rate():\n    return 0.1\n"
+"tests/conftest.py" = "import pytest\n"
+"tests/test_tax.py" = "from billing.tax import rate\n\n\ndef test_rate():\n    assert rate() == 0.1\n"
+[scenario.head]
+"tests/conftest.py" = "import pytest\n\n\n@pytest.fixture\ndef qty():\n    return 3\n"
+
+[[scenario]]
+id = "flake/helper-only"
+gate = "flake"
+category = "legit"
+why = "Only a test helper module changed; it contains no tests to re-run."
+argv = ["changed", "--base", "{base}", "--preset", "python", "--kind", "tests"]
+flake = 5
+expect = "pass"
+[scenario.base]
+"billing/__init__.py" = ""
+"billing/tax.py" = "def rate():\n    return 0.1\n"
+"tests/helpers.py" = "def make():\n    return 1\n"
+"tests/test_tax.py" = "from billing.tax import rate\n\n\ndef test_rate():\n    assert rate() == 0.1\n"
+[scenario.head]
+"tests/helpers.py" = "def make():\n    return 2\n"
+
+[[scenario]]
+id = "flake/django-tests-py"
+gate = "flake"
+category = "legit"
+why = "Django's app/tests.py is a test module and must be re-run, not treated as a source."
+argv = ["changed", "--base", "{base}", "--preset", "python", "--kind", "tests"]
+expect_lines = ["shop/tests.py"]
+[scenario.base]
+"shop/models.py" = "def total(items):\n    return sum(items)\n"
+[scenario.head]
+"shop/tests.py" = "from shop.models import total\n\n\ndef test_total():\n    assert total([1]) == 1\n"
+
+[[scenario]]
+id = "flake/node-selection-skips-fixtures"
+gate = "flake"
+category = "legit"
+why = "vitest exits 1 on a fixture or setup file ('No test files found'); only real test files may be selected."
+argv = ["changed", "--base", "{base}", "--preset", "node", "--kind", "tests", "--sep", "newline"]
+expect_lines = ["src/pricing.test.ts"]
+[scenario.base]
+"src/pricing.ts" = "export const a = 1;\n"
+[scenario.head]
+"src/pricing.test.ts" = "import { a } from './pricing';\n"
+"test/fixtures/order.json" = "{}\n"
+"src/test/setup.ts" = "export {};\n"
+
+[[scenario]]
+id = "flake/go-selection"
+gate = "flake"
+category = "legit"
+why = "Baseline: Go re-runs the packages of changed *_test.go files; testdata is not a test."
+argv = ["changed", "--base", "{base}", "--preset", "go", "--kind", "tests", "--sep", "newline"]
+expect_lines = ["pricing/pricing_test.go"]
+[scenario.base]
+"pricing/pricing.go" = "package pricing\n"
+[scenario.head]
+"pricing/pricing_test.go" = "package pricing\n"
+"pricing/testdata/case.json" = "{}\n"

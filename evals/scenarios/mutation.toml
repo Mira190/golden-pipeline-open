@@ -1,0 +1,165 @@
+# Mutation score gate and mutation scoping.
+#
+# Reports are artifacts written by the mutation tool; the gate narrows them to
+# the lines the PR changed (`--base`).
+
+[[scenario]]
+id = "mutation/stryker-survivor-blocks"
+gate = "mutation"
+category = "gaming"
+why = "Baseline: a surviving mutant on a changed line."
+argv = ["mutation", "reports/mutation.json", "--format", "stryker", "--base", "{base}"]
+expect = "block"
+[scenario.base]
+"src/a.ts" = "export const a = 1;\n"
+[scenario.head]
+"src/a.ts" = "export const a = 1;\nexport function f(x: number) {\n  return x > 1;\n}\n"
+[scenario.artifacts]
+"reports/mutation.json" = '''{"schemaVersion": "2", "thresholds": {"high": 80, "low": 60}, "files": {"src/a.ts": {"language": "typescript", "source": "", "mutants": [
+ {"id": "1", "mutatorName": "EqualityOperator", "status": "Survived", "location": {"start": {"line": 3, "column": 10}, "end": {"line": 3, "column": 15}}},
+ {"id": "2", "mutatorName": "BooleanLiteral", "status": "Killed", "location": {"start": {"line": 3, "column": 10}, "end": {"line": 3, "column": 15}}}
+]}}}'''
+
+[[scenario]]
+id = "mutation/stryker-killed-passes"
+gate = "mutation"
+category = "legit"
+why = "Baseline: every mutant on changed lines killed; a survivor on an untouched line is ignored."
+argv = ["mutation", "reports/mutation.json", "--format", "stryker", "--base", "{base}"]
+expect = "pass"
+[scenario.base]
+"src/a.ts" = "export const a = 1;\n"
+[scenario.head]
+"src/a.ts" = "export const a = 1;\nexport function f(x: number) {\n  return x > 1;\n}\n"
+[scenario.artifacts]
+"reports/mutation.json" = '''{"schemaVersion": "2", "thresholds": {"high": 80, "low": 60}, "files": {"src/a.ts": {"language": "typescript", "source": "", "mutants": [
+ {"id": "1", "mutatorName": "EqualityOperator", "status": "Killed", "location": {"start": {"line": 3, "column": 10}, "end": {"line": 3, "column": 15}}},
+ {"id": "2", "mutatorName": "StringLiteral", "status": "Survived", "location": {"start": {"line": 1, "column": 1}, "end": {"line": 1, "column": 5}}}
+]}}}'''
+
+[[scenario]]
+id = "mutation/absolute-report-paths"
+gate = "mutation"
+category = "robustness"
+why = "Stryker.NET and other mutation-testing-elements writers key files by absolute path; filtering by the diff must still find them."
+argv = ["mutation", "reports/mutation.json", "--format", "stryker", "--base", "{base}"]
+expect = "block"
+[scenario.base]
+"src/a.ts" = "export const a = 1;\n"
+[scenario.head]
+"src/a.ts" = "export const a = 1;\nexport function f(x: number) {\n  return x > 1;\n}\n"
+[scenario.artifacts]
+"reports/mutation.json" = '''{"schemaVersion": "2", "projectRoot": "{root}", "thresholds": {"high": 80, "low": 60}, "files": {"{root}/src/a.ts": {"language": "typescript", "source": "", "mutants": [
+ {"id": "1", "mutatorName": "EqualityOperator", "status": "Survived", "location": {"start": {"line": 3, "column": 10}, "end": {"line": 3, "column": 15}}}
+]}}}'''
+
+[[scenario]]
+id = "mutation/elements-format-name"
+gate = "mutation"
+category = "legit"
+why = "The report schema is tool-neutral (mutation-testing-elements); Stryker.NET, Stryker4s and muttest emit it too."
+argv = ["mutation", "mutation.json", "--format", "mutation-testing-elements", "--base", "{base}"]
+expect = "block"
+[scenario.base]
+"src/A.cs" = "class A {}\n"
+[scenario.head]
+"src/A.cs" = "class A {\n  bool F(int x) { return x > 1; }\n}\n"
+[scenario.artifacts]
+"mutation.json" = '''{"schemaVersion": "2", "thresholds": {"high": 80, "low": 60}, "files": {"src/A.cs": {"language": "cs", "source": "", "mutants": [
+ {"id": "1", "mutatorName": "Equality", "status": "Survived", "location": {"start": {"line": 2, "column": 26}, "end": {"line": 2, "column": 31}}}
+]}}}'''
+
+[[scenario]]
+id = "mutation/gremlins-mostly-timeouts"
+gate = "mutation"
+category = "robustness"
+why = "Baseline: a miscalibrated timeout makes most mutants 'time out'; that run proves nothing."
+argv = ["mutation", "gremlins.json", "--format", "gremlins", "--base", "{base}"]
+expect = "block"
+[scenario.base]
+"pricing/p.go" = "package pricing\n"
+[scenario.head]
+"pricing/p.go" = "package pricing\n\nfunc F(x int) bool {\n\treturn x > 1\n}\n"
+[scenario.artifacts]
+"gremlins.json" = '''{"files": [{"file_name": "pricing/p.go", "mutations": [
+ {"line": 4, "column": 11, "type": "CONDITIONALS_BOUNDARY", "status": "TIMED OUT"},
+ {"line": 4, "column": 11, "type": "CONDITIONALS_NEGATION", "status": "TIMED OUT"},
+ {"line": 4, "column": 11, "type": "ARITHMETIC_BASE", "status": "KILLED"}
+]}]}'''
+
+[[scenario]]
+id = "mutation/missing-report"
+gate = "mutation"
+category = "robustness"
+why = "Baseline: the mutation tool crashed and wrote nothing; never read that as 'no mutants'."
+argv = ["mutation", "reports/mutation.json", "--format", "stryker", "--base", "{base}"]
+expect = "error"
+[scenario.head]
+"src/a.ts" = "export const a = 2;\n"
+
+[[scenario]]
+id = "mutation/truncated-report"
+gate = "mutation"
+category = "robustness"
+why = "Baseline: a half-written report fails closed."
+argv = ["mutation", "reports/mutation.json", "--format", "stryker", "--base", "{base}"]
+expect = "error"
+[scenario.head]
+"src/a.ts" = "export const a = 2;\n"
+[scenario.artifacts]
+"reports/mutation.json" = '{"files": {"src/a.ts": {"mutants": [{"status": '
+
+[[scenario]]
+id = "mutation/malformed-mutant"
+gate = "mutation"
+category = "robustness"
+why = "A report missing `location` (schema drift in a tool upgrade) must fail closed with a message."
+argv = ["mutation", "reports/mutation.json", "--format", "stryker", "--base", "{base}"]
+expect = "error"
+[scenario.head]
+"src/a.ts" = "export const a = 2;\n"
+[scenario.artifacts]
+"reports/mutation.json" = '{"files": {"src/a.ts": {"mutants": [{"status": "Survived"}]}}}'
+
+[[scenario]]
+id = "mutation/waiver-added-in-pr"
+gate = "mutation"
+category = "gaming"
+why = "The PR waives the mutation gate for its own weak tests."
+argv = ["mutation", "reports/mutation.json", "--format", "stryker", "--base", "{base}"]
+expect = "block"
+[scenario.base]
+"src/a.ts" = "export const a = 1;\n"
+[scenario.head]
+"src/a.ts" = "export const a = 1;\nexport function f(x: number) {\n  return x > 1;\n}\n"
+"golden.toml" = "[waivers.mutation]\nreason = \"tests later\"\nexpires = {in30days}\n"
+[scenario.artifacts]
+"reports/mutation.json" = '''{"schemaVersion": "2", "thresholds": {"high": 80, "low": 60}, "files": {"src/a.ts": {"language": "typescript", "source": "", "mutants": [
+ {"id": "1", "mutatorName": "EqualityOperator", "status": "Survived", "location": {"start": {"line": 3, "column": 10}, "end": {"line": 3, "column": 15}}}
+]}}}'''
+
+[[scenario]]
+id = "mutation-targets/python-functions"
+gate = "mutation-targets"
+category = "legit"
+why = "Baseline: only the changed function and method are mutated."
+argv = ["changed", "--base", "{base}", "--preset", "python", "--kind", "mutation-targets", "--sep", "newline"]
+expect_lines = ["pkg.mod.x_first__mutmut_*", "pkg.mod.xǁCartǁadd__mutmut_*"]
+[scenario.base]
+"pkg/mod.py" = "def first(a):\n    return a + 1\n\n\ndef other(a):\n    return a\n\n\nclass Cart:\n    def add(self, x):\n        return x\n"
+[scenario.head]
+"pkg/mod.py" = "def first(a):\n    return a + 2\n\n\ndef other(a):\n    return a\n\n\nclass Cart:\n    def add(self, x):\n        return x * 2\n"
+"tests/test_mod.py" = "import pkg.mod\n"
+
+[[scenario]]
+id = "mutation-targets/exempt-added-in-pr"
+gate = "mutation-targets"
+category = "gaming"
+why = "A presence.exempt glob added by the PR also hid its code from mutation testing."
+argv = ["changed", "--base", "{base}", "--preset", "python", "--kind", "mutation-targets", "--sep", "newline"]
+expect_lines = ["pkg.mod.x_first__mutmut_*"]
+[scenario.base]
+"pkg/mod.py" = "def first(a):\n    return a + 1\n"
+[scenario.head]
+"pkg/mod.py" = "def first(a):\n    return a + 2\n"
+"golden.toml" = "[presence]\nexempt = [\"pkg/**\"]\n"

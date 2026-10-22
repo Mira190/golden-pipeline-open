@@ -13,8 +13,9 @@ from __future__ import annotations
 
 import json
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 Range = tuple[int, int]
@@ -69,11 +70,24 @@ class Tally:
         return cls(c[KILLED], c[TIMEOUT], c[SURVIVED], c[NO_COVERAGE])
 
 
-def _stryker(data: dict[str, Any]) -> list[Mutant]:
-    # mutation-testing-report-schema: files.<path>.mutants[]
+def _relative(name: str, project_root: str | None) -> str:
+    """Report paths may be absolute (Stryker.NET, PIT); the diff's are project-relative."""
+    path = PurePosixPath(name)
+    if not path.is_absolute():
+        return name
+    for root in (project_root, Path.cwd().as_posix()):
+        if root and path.is_relative_to(root):
+            return str(path.relative_to(root))
+    return name
+
+
+def _elements(data: dict[str, Any]) -> list[Mutant]:
+    # mutation-testing-report-schema (StrykerJS, Stryker.NET, Stryker4s, ...):
+    # files.<path>.mutants[]
+    root = data.get("projectRoot")
     return [
         Mutant(
-            name,
+            _relative(name, root),
             int(m["location"]["start"]["line"]),
             STRYKER.get(m["status"], OTHER),
             m.get("mutatorName", ""),
@@ -103,8 +117,12 @@ def _mutmut(data: dict[str, Any]) -> Tally:
     )
 
 
-LINE_PARSERS = {"stryker": _stryker, "gremlins": _gremlins}
-FORMATS = ("gremlins", "mutmut", "stryker")
+LINE_PARSERS: dict[str, Callable[[dict[str, Any]], list[Mutant]]] = {
+    "gremlins": _gremlins,
+    "mutation-testing-elements": _elements,
+    "stryker": _elements,
+}
+PARSERS = (*LINE_PARSERS, "mutmut")
 
 
 def _load(path: Path) -> dict[str, Any]:
@@ -124,9 +142,13 @@ def evaluate(
 ) -> tuple[Tally, list[Mutant]]:
     """Tally and surviving mutants, optionally restricted to changed lines."""
     data = _load(path)
-    if fmt == "mutmut":
-        return _mutmut(data), []
-    mutants = LINE_PARSERS[fmt](data)
+    try:
+        if fmt == "mutmut":
+            return _mutmut(data), []
+        mutants = LINE_PARSERS[fmt](data)
+    except (KeyError, TypeError, ValueError, AttributeError) as exc:
+        # Schema drift after a tool upgrade must fail closed, with a readable reason.
+        raise ValueError(f"malformed {fmt} report {path}: {exc!r}") from exc
     if lines is not None:
         mutants = [m for m in mutants if in_ranges(m, lines)]
     lived = [m for m in mutants if m.status in {SURVIVED, NO_COVERAGE}]

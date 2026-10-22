@@ -1,0 +1,284 @@
+# Test presence: every changed source file ships with a changed test that references it.
+#
+# legit       a reasonable PR the gate must let through (a block is a false block)
+# gaming      a PR that dodges the bar; the gate must stop it (a pass is an escape)
+# robustness  odd but real inputs the gate must handle without crashing or failing open
+
+[[scenario]]
+id = "presence/python-basic"
+gate = "presence"
+category = "legit"
+why = "Baseline: a module and a test that imports it."
+argv = ["presence", "--base", "{base}", "--preset", "python"]
+expect = "pass"
+[scenario.base]
+"billing/tax.py" = "def rate():\n    return 0.1\n"
+[scenario.head]
+"billing/tax.py" = "def rate():\n    return 0.2\n"
+"tests/test_tax.py" = "from billing.tax import rate\n\n\ndef test_rate():\n    assert rate() == 0.2\n"
+
+[[scenario]]
+id = "presence/python-no-tests"
+gate = "presence"
+category = "gaming"
+why = "Baseline: behaviour changed and no test changed."
+argv = ["presence", "--base", "{base}", "--preset", "python"]
+expect = "block"
+[scenario.base]
+"billing/tax.py" = "def rate():\n    return 0.1\n"
+[scenario.head]
+"billing/tax.py" = "def rate():\n    return 0.2\n"
+
+[[scenario]]
+id = "presence/python-unrelated-test"
+gate = "presence"
+category = "gaming"
+why = "A changed test exists, but it exercises a different module."
+argv = ["presence", "--base", "{base}", "--preset", "python"]
+expect = "block"
+[scenario.base]
+"billing/tax.py" = "def rate():\n    return 0.1\n"
+"billing/fees.py" = "def fee():\n    return 1\n"
+[scenario.head]
+"billing/tax.py" = "def rate():\n    return 0.2\n"
+"tests/test_fees.py" = "from billing.fees import fee\n\n\ndef test_fee():\n    assert fee() == 1\n"
+
+[[scenario]]
+id = "presence/python-comment-mention"
+gate = "presence"
+category = "gaming"
+why = "The only 'reference' to the module is a comment; nothing tests it."
+argv = ["presence", "--base", "{base}", "--preset", "python"]
+expect = "block"
+[scenario.base]
+"billing/tax.py" = "def rate():\n    return 0.1\n"
+"billing/fees.py" = "def fee():\n    return 1\n"
+[scenario.head]
+"billing/tax.py" = "def rate():\n    return 0.2\n"
+"tests/test_fees.py" = "# TODO: also cover tax\nfrom billing.fees import fee\n\n\ndef test_fee():\n    assert fee() == 1\n"
+
+[[scenario]]
+id = "presence/python-string-mention"
+gate = "presence"
+category = "gaming"
+why = "The module name appears only inside an unrelated string literal."
+known_gap = "Strings are kept on purpose: mock.patch('billing.tax.rate') is a real reference. Mutation testing is the backstop."
+argv = ["presence", "--base", "{base}", "--preset", "python"]
+expect = "block"
+[scenario.base]
+"billing/tax.py" = "def rate():\n    return 0.1\n"
+"billing/fees.py" = "def fee():\n    return 1\n"
+[scenario.head]
+"billing/tax.py" = "def rate():\n    return 0.2\n"
+"tests/test_fees.py" = "from billing.fees import fee\n\n\ndef test_fee():\n    assert fee() == 1, 'tax is separate'\n"
+
+[[scenario]]
+id = "presence/django-tests-py"
+gate = "presence"
+category = "legit"
+why = "Django's default layout: app/tests.py with a relative import."
+argv = ["presence", "--base", "{base}", "--preset", "python"]
+expect = "pass"
+[scenario.base]
+"shop/models.py" = "def total(items):\n    return sum(items)\n"
+"shop/tests.py" = "from .models import total\n\n\ndef test_total():\n    assert total([1]) == 1\n"
+[scenario.head]
+"shop/models.py" = "def total(items):\n    return sum(items) if items else 0\n"
+"shop/tests.py" = "from .models import total\n\n\ndef test_total():\n    assert total([1]) == 1\n    assert total([]) == 0\n"
+
+[[scenario]]
+id = "presence/python-relative-import"
+gate = "presence"
+category = "legit"
+why = "Tests inside the package import the module relatively (from ..core import ...)."
+argv = ["presence", "--base", "{base}", "--preset", "python"]
+expect = "pass"
+[scenario.base]
+"pkg/__init__.py" = ""
+"pkg/core.py" = "def f():\n    return 1\n"
+"pkg/tests/__init__.py" = ""
+[scenario.head]
+"pkg/core.py" = "def f():\n    return 2\n"
+"pkg/tests/test_core.py" = "from ..core import f\n\n\ndef test_f():\n    assert f() == 2\n"
+
+[[scenario]]
+id = "presence/python-nested-test-helper"
+gate = "presence"
+category = "legit"
+why = "Only a test helper under pkg/tests/ changed; it is test code, not a source needing its own test."
+argv = ["presence", "--base", "{base}", "--preset", "python"]
+expect = "pass"
+[scenario.base]
+"pkg/__init__.py" = ""
+"pkg/tests/__init__.py" = ""
+"pkg/tests/factories.py" = "def make():\n    return {}\n"
+[scenario.head]
+"pkg/tests/factories.py" = "def make(**kw):\n    return dict(kw)\n"
+
+[[scenario]]
+id = "presence/python-exempt-added-in-pr"
+gate = "presence"
+category = "gaming"
+why = "The PR exempts the very file it changes without tests. A change must not grade itself."
+argv = ["presence", "--base", "{base}", "--preset", "python"]
+expect = "block"
+[scenario.base]
+"billing/tax.py" = "def rate():\n    return 0.1\n"
+[scenario.head]
+"billing/tax.py" = "def rate():\n    return 0.2\n"
+"golden.toml" = "[presence]\nexempt = [\"billing/**\"]\n"
+
+[[scenario]]
+id = "presence/python-waiver-added-in-pr"
+gate = "presence"
+category = "gaming"
+why = "The PR adds a 30-day waiver for the gate it would otherwise fail."
+argv = ["presence", "--base", "{base}", "--preset", "python"]
+expect = "block"
+[scenario.base]
+"billing/tax.py" = "def rate():\n    return 0.1\n"
+[scenario.head]
+"billing/tax.py" = "def rate():\n    return 0.2\n"
+"golden.toml" = "[waivers.test-presence]\nreason = \"later\"\nexpires = {in30days}\n"
+
+[[scenario]]
+id = "presence/python-base-waiver-honoured"
+gate = "presence"
+category = "legit"
+why = "A waiver already reviewed and merged on the default branch still applies."
+argv = ["presence", "--base", "{base}", "--preset", "python"]
+expect = "pass"
+stdout_contains = ["failed (waived)"]
+[scenario.base]
+"billing/tax.py" = "def rate():\n    return 0.1\n"
+"golden.toml" = "[waivers.test-presence]\nreason = \"legacy, PLAT-1\"\nexpires = {in60days}\n"
+[scenario.head]
+"billing/tax.py" = "def rate():\n    return 0.2\n"
+
+[[scenario]]
+id = "presence/python-unicode-filename"
+gate = "presence"
+category = "robustness"
+why = "A non-ASCII file name is C-quoted by git; the source must still be seen."
+known_gap = "Fixed in src/golden/gitdiff.py on the CI session's branch (claude/exciting-newton-q0imwh); passes once merged."
+argv = ["presence", "--base", "{base}", "--preset", "python"]
+expect = "block"
+[scenario.base]
+"README.md" = "x\n"
+[scenario.head]
+"billing/税率.py" = "def rate():\n    return 0.2\n"
+
+[[scenario]]
+id = "presence/annotation-path-escaping"
+gate = "presence"
+category = "robustness"
+why = "A comma in a path must be escaped in the workflow command, or the annotation lands nowhere."
+argv = ["presence", "--base", "{base}", "--preset", "python"]
+expect = "block"
+stdout_contains = ["::error file=billing/a%2Cb.py::"]
+[scenario.base]
+"README.md" = "x\n"
+[scenario.head]
+"billing/a,b.py" = "X = 1\n"
+
+[[scenario]]
+id = "presence/report-only-label"
+gate = "presence"
+category = "legit"
+why = "A refactor carrying the opt-out label is reported, not blocked."
+argv = ["presence", "--base", "{base}", "--preset", "python", "--report-only"]
+expect = "pass"
+labels = ["no-tests-needed"]
+[scenario.base]
+"billing/tax.py" = "def rate():\n    return 0.1\n"
+[scenario.head]
+"billing/tax.py" = "def rate():\n    return 0.1  # same behaviour\n"
+
+[[scenario]]
+id = "presence/node-basic"
+gate = "presence"
+category = "legit"
+why = "Baseline: pricing.ts with pricing.test.ts."
+argv = ["presence", "--base", "{base}", "--preset", "node"]
+expect = "pass"
+[scenario.base]
+"src/pricing.ts" = "export const a = 1;\n"
+[scenario.head]
+"src/pricing.ts" = "export const a = 2;\n"
+"src/pricing.test.ts" = "import { a } from './pricing';\n"
+
+[[scenario]]
+id = "presence/node-no-tests"
+gate = "presence"
+category = "gaming"
+why = "Baseline: TypeScript change without tests."
+argv = ["presence", "--base", "{base}", "--preset", "node"]
+expect = "block"
+[scenario.base]
+"src/pricing.ts" = "export const a = 1;\n"
+[scenario.head]
+"src/pricing.ts" = "export const a = 2;\n"
+
+[[scenario]]
+id = "presence/node-dotted-basename"
+gate = "presence"
+category = "legit"
+why = "Angular/Nest naming: order.service.ts imported by checkout.test.ts."
+argv = ["presence", "--base", "{base}", "--preset", "node"]
+expect = "pass"
+[scenario.base]
+"src/order.service.ts" = "export const a = 1;\n"
+[scenario.head]
+"src/order.service.ts" = "export const a = 2;\n"
+"src/checkout.test.ts" = "import { a } from './order.service';\n"
+
+[[scenario]]
+id = "presence/node-explicit-index-import"
+gate = "presence"
+category = "legit"
+why = "ESM requires explicit paths: import from './cart/index.js'."
+argv = ["presence", "--base", "{base}", "--preset", "node"]
+expect = "pass"
+[scenario.base]
+"src/cart/index.ts" = "export const a = 1;\n"
+[scenario.head]
+"src/cart/index.ts" = "export const a = 2;\n"
+"src/app.test.ts" = "import { a } from './cart/index.js';\n"
+
+[[scenario]]
+id = "presence/node-test-setup-file"
+gate = "presence"
+category = "legit"
+why = "Only src/test/setup.ts (Vitest setupFiles) changed; that is test code."
+argv = ["presence", "--base", "{base}", "--preset", "node"]
+expect = "pass"
+[scenario.base]
+"src/test/setup.ts" = "export {};\n"
+[scenario.head]
+"src/test/setup.ts" = "export const seed = 1;\n"
+
+[[scenario]]
+id = "presence/go-same-package"
+gate = "presence"
+category = "legit"
+why = "Baseline: Go tests live beside the package."
+argv = ["presence", "--base", "{base}", "--preset", "go"]
+expect = "pass"
+[scenario.base]
+"pricing/pricing.go" = "package pricing\n"
+[scenario.head]
+"pricing/pricing.go" = "package pricing\n\nconst A = 1\n"
+"pricing/pricing_test.go" = "package pricing\n"
+
+[[scenario]]
+id = "presence/go-other-package"
+gate = "presence"
+category = "gaming"
+why = "A test changed in a different package does not test this one."
+argv = ["presence", "--base", "{base}", "--preset", "go"]
+expect = "block"
+[scenario.base]
+"pricing/pricing.go" = "package pricing\n"
+[scenario.head]
+"pricing/pricing.go" = "package pricing\n\nconst A = 1\n"
+"cart/cart_test.go" = "package cart\n"

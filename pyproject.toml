@@ -68,6 +68,7 @@ max-complexity = 10
 "tests/**" = ["S101", "ANN", "PLR2004", "PLR0913", "PLR0917", "DTZ"]
 "src/golden/{report,cli}.py" = ["T20"]
 "scripts/**" = ["T20", "S603", "ANN", "PLR0914"]
+"evals/**" = ["T20", "S603"]
 
 [tool.mypy]
 strict = true

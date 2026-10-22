@@ -31,7 +31,10 @@ def detect_format(path: Path) -> str:
 
 
 def _cobertura(text: str) -> Totals:
-    root = ElementTree.fromstring(text)  # noqa: S314  # nosec B314
+    try:
+        root = ElementTree.fromstring(text)  # noqa: S314  # nosec B314
+    except ElementTree.ParseError as exc:
+        raise ValueError(f"unreadable Cobertura report: {exc}") from exc
     if "lines-valid" in root.attrib:
         return Totals(int(root.attrib["lines-covered"]), int(root.attrib["lines-valid"]))
     lines = root.iter("line")
@@ -71,7 +74,10 @@ def read_totals(path: Path, fmt: str = "auto") -> Totals:
 def read_baseline(path: Path) -> float | None:
     if not path.exists():
         return None
-    return float(json.loads(path.read_text(encoding="utf-8"))["line_percent"])
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or "line_percent" not in data:
+        raise ValueError(f"coverage baseline {path} has no line_percent")
+    return float(data["line_percent"])
 
 
 def write_baseline(path: Path, percent: float, sha: str = "") -> None:

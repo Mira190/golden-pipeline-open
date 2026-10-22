@@ -184,12 +184,52 @@ def test_build_without_label_input(repo):
     assert outputs["base"] == ""
 
 
-def test_write_outputs(tmp_path):
+def test_write_outputs(tmp_path, monkeypatch):
     target = tmp_path / "out"
-    plan.write_outputs({"a": "1", "b": "x y"}, target)
-    assert target.read_text() == "a=1\nb=x y\n"
-    with pytest.raises(ValueError, match="single line"):
-        plan.write_outputs({"c": "1\n2"}, target)
+    monkeypatch.setattr(plan.secrets, "token_hex", lambda n: "f" * 2 * n)
+    plan.write_outputs({"a": "1", "b": "x y", "c": "make deps\nmake test", "d": "x\ry"}, target)
+    end = "GOLDEN_" + "f" * 32
+    assert target.read_bytes().decode() == (
+        f"a=1\nb=x y\nc<<{end}\nmake deps\nmake test\n{end}\nd<<{end}\nx\ry\n{end}\n"
+    )
+
+
+def test_write_outputs_cannot_be_injected(tmp_path):
+    target = tmp_path / "out"
+    plan.write_outputs({"cmd": "pytest\nbase=0000", "base": "real"}, target)
+    lines = target.read_text().splitlines()
+    assert lines[0].startswith("cmd<<GOLDEN_")
+    assert lines[3] == lines[0].removeprefix("cmd<<")
+    assert lines[4] == "base=real"
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        plan.Event("pull_request", {}),
+        plan.Event("pull_request", {"pull_request": {"base": None}}),
+        plan.Event("merge_group", {"merge_group": {}}),
+    ],
+)
+def test_event_without_base_fails_closed(event):
+    with pytest.raises(ValueError, match="event payload has no base commit"):
+        event.base()
+
+
+def test_changes_select_only_runnable_tests(repo):
+    repo.commit({"pkg/a.py": "def f():\n    return 1\n"})
+    base = repo.git("rev-parse", "HEAD")
+    repo.commit(
+        {
+            "tests/conftest.py": "import pytest\n",
+            "tests/helpers.py": "X = 1\n",
+            "tests/test_a.py": "from pkg.a import f\n",
+            "shop/tests.py": "def test_x():\n    pass\n",
+        }
+    )
+    result = plan.changes("python", base, POLICY)
+    assert result["tests"] == "shop/tests.py tests/test_a.py"
+    assert result["test-packages"] == "./shop ./tests"
 
 
 def test_render_escapes_pipes():
@@ -207,8 +247,10 @@ def test_render_escapes_pipes():
         "",
     )
     outputs["format-command"] = "a || b"
+    outputs["test-command"] = "make deps\nmake test"
     text = plan.render("go", outputs)
     assert "| format-command | `a \\|\\| b` |" in text
+    assert "| test-command | `make deps ⏎ make test` |" in text
     assert "| base | _(none)_ |" in text
 
 
