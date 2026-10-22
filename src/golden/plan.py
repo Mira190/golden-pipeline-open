@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from golden import gitdiff, impact, presets
+from golden import gitdiff, impact, optout, presets
 from golden.config import Policy
 from golden.globmatch import match_any
 
@@ -108,8 +108,9 @@ class Event:
             raise ValueError(f"{self.name} event payload has no base commit") from exc
         return ""
 
-    def labels(self) -> set[str]:
-        return {lbl["name"] for lbl in self.payload.get("pull_request", {}).get("labels", [])}
+    def opt_out(self, label: str, repository: str, fetch: optout.Fetch) -> optout.Decision:
+        """Whether the test-presence opt-out label counts (a second person applied it)."""
+        return optout.decide(self.payload, self.name, label, repository, fetch)
 
 
 def _node_install(root: Path) -> str:
@@ -211,10 +212,13 @@ def gating_changes(base: str, policy_path: Path) -> list[str]:
 
 
 def build(
-    language: str, inputs: dict[str, Any], event: Event, policy: Policy, root: Path
+    language: str,
+    inputs: dict[str, Any],
+    event: Event,
+    policy: Policy,
+    root: Path,
 ) -> dict[str, str]:
     base = event.base()
-    label = str(inputs.get("skip-presence-label") or "")
     return {
         "slug": slug(str(inputs.get("working-directory") or ".")),
         **commands(language, inputs, root),
@@ -222,7 +226,9 @@ def build(
         "base": base,
         "event": event.name,
         "repeats": f"{policy.get('flaky.repeats'):g}",
-        "presence-report-only": "true" if label and label in event.labels() else "false",
+        # Set by `golden plan` from optout.decide, which needs the API.
+        "presence-report-only": "false",
+        "presence-opt-out": "",
     }
 
 
@@ -249,10 +255,11 @@ def render(language: str, outputs: dict[str, str]) -> str:
         "tests",
         "mutate",
         "gating-changes",
+        "presence-opt-out",
     )
     rows = [
         f"| {k} | `{outputs[k].replace('|', '\\|').replace(chr(10), ' ⏎ ')}` |"
-        if outputs[k]
+        if outputs.get(k)
         else f"| {k} | _(none)_ |"
         for k in keys
     ]

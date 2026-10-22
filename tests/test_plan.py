@@ -161,7 +161,7 @@ def test_exempt_sources_are_not_mutated(repo):
     assert plan.changes("python", base, policy)["sources-changed"] == "false"
 
 
-def test_build_reports_label_and_repeats(repo):
+def test_build_reports_opt_out_and_repeats(repo):
     repo.commit({"README.md": "x"})
     base = repo.git("rev-parse", "HEAD")
     repo.commit({"README.md": "y"})
@@ -172,7 +172,9 @@ def test_build_reports_label_and_repeats(repo):
         POLICY,
         repo.root,
     )
-    assert outputs["presence-report-only"] == "true"
+    # A label alone never makes the gate report-only: `golden plan` decides who applied it.
+    assert outputs["presence-report-only"] == "false"
+    assert outputs["presence-opt-out"] == ""
     assert outputs["repeats"] == "10"
     assert outputs["base"] == base
     assert outputs["event"] == "pull_request"
@@ -182,6 +184,7 @@ def test_build_reports_label_and_repeats(repo):
 def test_build_without_label_input(repo):
     outputs = plan.build("go", {}, plan.Event("push", {}), POLICY, repo.root)
     assert outputs["presence-report-only"] == "false"
+    assert outputs["presence-opt-out"] == ""
     assert outputs["base"] == ""
 
 

@@ -98,3 +98,41 @@ stdout_contains = ["::warning file=.github/workflows/ci.yml::This pull request c
 "app.py" = "X = 1\n"
 [scenario.head]
 ".github/workflows/ci.yml" = "on: pull_request\njobs:\n  ci:\n    with:\n      mutation: false\n"
+
+[[scenario]]
+id = "plan/opt-out-label-by-reviewer"
+gate = "plan"
+category = "legit"
+why = "A reviewer applies the opt-out label to a pure refactor: test presence becomes report-only."
+argv = ["plan", "--language", "python"]
+inputs = { "skip-presence-label" = "no-tests-needed" }
+labels = ["no-tests-needed"]
+event = { "pull_request" = { "number" = 7, "user" = { "login" = "author" } }, "label" = { "name" = "no-tests-needed" }, "sender" = { "login" = "reviewer" } }
+expect = "pass"
+expect_outputs = { "presence-report-only" = "true" }
+
+[[scenario]]
+id = "plan/opt-out-label-by-author"
+gate = "plan"
+category = "gaming"
+why = "The PR author labels their own PR to skip test presence: a self-service bypass."
+argv = ["plan", "--language", "python"]
+inputs = { "skip-presence-label" = "no-tests-needed" }
+labels = ["no-tests-needed"]
+event = { "pull_request" = { "number" = 7, "user" = { "login" = "author" } }, "label" = { "name" = "no-tests-needed" }, "sender" = { "login" = "author" } }
+expect = "pass"
+expect_outputs = { "presence-report-only" = "false" }
+stdout_contains = ["the PR author (@author) applied it"]
+
+[[scenario]]
+id = "plan/opt-out-label-unverifiable"
+gate = "plan"
+category = "gaming"
+why = "On a later push nobody can say who applied the label (no API here): it must not count."
+argv = ["plan", "--language", "python"]
+inputs = { "skip-presence-label" = "no-tests-needed" }
+labels = ["no-tests-needed"]
+event = { "pull_request" = { "number" = 7, "user" = { "login" = "author" } } }
+expect = "pass"
+expect_outputs = { "presence-report-only" = "false" }
+stdout_contains = ["could not verify who applied it"]

@@ -25,6 +25,7 @@ from golden import (
     impact,
     local,
     mutation,
+    optout,
     plan,
     presence,
     presets,
@@ -74,7 +75,18 @@ def cmd_policy(args: argparse.Namespace) -> int:
 # ----------------------------------------------------------------- plan
 def cmd_plan(args: argparse.Namespace) -> int:
     inputs = json.loads(os.environ.get("GOLDEN_INPUTS") or "{}")
-    outputs = plan.build(args.language, inputs, plan.Event.from_env(), _policy(args), Path())
+    event = plan.Event.from_env()
+    repository, token = os.environ.get("GITHUB_REPOSITORY", ""), os.environ.get("GITHUB_TOKEN")
+    opt_out = event.opt_out(
+        str(inputs.get("skip-presence-label") or ""),
+        repository,
+        lambda path: optout.api_get(path, token) if repository else None,
+    )
+    if opt_out.note:
+        annotate("notice" if opt_out.report_only else "warning", opt_out.note)
+    outputs = plan.build(args.language, inputs, event, _policy(args), Path())
+    outputs["presence-report-only"] = "true" if opt_out.report_only else "false"
+    outputs["presence-opt-out"] = opt_out.note
     gating = plan.gating_changes(outputs["base"], args.policy)
     for path in gating:
         annotate("warning", plan.GATING_WARNING, file=path)

@@ -45,7 +45,17 @@ Ignored automatically: generated code (`*.pb.go`, `*_gen.go`, `*.d.ts`), config 
 
 **Escape hatch:** the PR label `no-tests-needed` (configurable with `skip-presence-label`) makes the
 gate report-only for that PR. This is meant for pure refactors covered by existing tests. The label
-and the report-only verdict are visible to reviewers, and diff coverage still applies. Adding or
+and the report-only verdict are visible to reviewers, and diff coverage still applies.
+
+**The label needs a second person.** It counts only when someone other than the PR author applied
+it. On the `labeled` event the applier comes from the event itself. On later pushes it comes from
+the issue events API, which the `contents: read` token can read on public repositories. When the
+applier can't be verified (for example, on a private repository whose token can't read issue
+events), the label is ignored and the gate is enforced. The plan summary and an annotation say who
+applied the label, or why it was ignored. A time-boxed `[waivers.test-presence]` in `golden.toml`
+is the alternative that always works, because it merges only with a code owner's review.
+
+Adding or
 removing the label re-runs the pipeline only when the caller's `pull_request` trigger lists the
 `labeled` and `unlabeled` activity types, as the [templates](../templates) do.
 

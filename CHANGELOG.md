@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+Second-person rules:
+
+- The test-presence opt-out label counts only when someone other than the PR author applied it,
+  and only when that can be verified (`golden.optout`). A self-applied or unverifiable label is
+  ignored with a warning, and the gate stays enforced.
+
 Weakening a test is gated:
 
 - Mutation testing now also mutates every source function that a changed or **removed** test
