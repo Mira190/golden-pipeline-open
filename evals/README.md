@@ -61,11 +61,14 @@ The same scenarios, run against the code before and after the hardening in this 
 
 | | Scenarios | Correct | Escapes | False blocks | Robustness failures | Crashes | Known gaps |
 |---|---|---|---|---|---|---|---|
-| v1.0.0 (initial release) | 81 | 29 | **21** | **16** | **13** | 7 | 2 |
-| now | 81 | 79 | 0 | 0 | 0 | 0 | 2 |
+| v1.0.0 (initial release) | 92 | 30 | **30** | **18** | **13** | 7 | 1 |
+| now | 92 | 91 | 0 | 0 | 0 | 0 | 1 |
 
-(Two scorecard scenarios exercise the `gates-on` control, which v1.0.0 doesn't have. They count
-against it: one as an escape, one as a false block.)
+Crashes are robustness failures too, so they are counted in both columns.
+
+16 of v1.0.0's 61 wrong decisions come from controls it doesn't have, such as test-weakening
+scope, the self-gating warning and owned OSV exceptions. The other 45 are defects in gates it
+already shipped. [Value](../docs/value.md#1-the-right-merge-decision) breaks them down.
 
 The worst escapes before the hardening, all now closed:
 
@@ -88,15 +91,16 @@ The most common false blocks before the hardening, all now fixed:
 - A change to only `conftest.py`. The flake gate ran pytest on it and pytest exited 5.
 - Multi-line `test-command` inputs.
 
-Two known gaps remain, on purpose and in the open:
+One known gap remains, on purpose and in the open:
 
 - `presence/python-string-mention`: a module name inside an unrelated string literal still counts
   as a reference, because strings are how `mock.patch("pkg.mod.f")` names its target. Mutation
   testing is the backstop.
-- `mutation-targets/test-only-weakening`: a pull request that only deletes assertions from an
-  existing test changes no source line. Diff coverage, test presence and diff-scoped mutation
-  therefore have nothing to check, and total coverage doesn't move. The mitigations are listed
-  in the [red-team review](../docs/redteam/2026-10-22-review.md) (R5).
+
+A second gap is now closed. `mutation-targets/test-only-weakening` is a pull request that only
+deletes assertions from an existing test, so it changes no source line. The functions a changed
+test names now join the mutation scope ([red-team review](../docs/redteam/2026-10-22-review.md),
+R5), so the scenario passes, and so do four more like it.
 
 ## Adding a scenario
 

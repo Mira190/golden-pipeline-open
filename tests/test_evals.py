@@ -6,6 +6,7 @@ so fixing a gap fails the suite until the label is removed.
 
 import importlib.util
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -40,6 +41,20 @@ def test_corpus_is_labelled():
         checks = (s.expect, s.expect_lines, s.expect_json, s.expect_outputs, s.stdout_contains)
         assert any(c not in (None, []) for c in checks), s.id
     assert {s.category for s in SCENARIOS} == {"legit", "gaming", "robustness"}
+
+
+@pytest.mark.parametrize("doc", ["README.md", "docs/value.md"])
+def test_docs_quote_the_corpus_size(doc):
+    quoted = re.findall(r"(\d+) labelled pull requests", (ROOT / doc).read_text(encoding="utf-8"))
+    assert quoted
+    assert {int(n) for n in quoted} == {len(SCENARIOS)}
+
+
+def test_results_table_matches_the_corpus():
+    gaps = sum(1 for s in SCENARIOS if s.known_gap)
+    n = len(SCENARIOS)
+    row = f"| now | {n} | {n - gaps} | 0 | 0 | 0 | 0 | {gaps} |"
+    assert row in (ROOT / "evals" / "README.md").read_text(encoding="utf-8")
 
 
 def test_duplicate_ids_are_rejected(tmp_path):
