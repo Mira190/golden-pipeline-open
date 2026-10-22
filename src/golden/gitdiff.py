@@ -97,6 +97,7 @@ def changed_lines(base: str, *, cwd: Path | None = None) -> dict[str, list[Range
         if body:
             body -= not line.startswith("\\")  # "\ No newline at end of file"
         elif line.startswith("+++ "):
+            # Never "+++ /dev/null": --diff-filter=ACMR excludes deletions.
             current = _target(line)
         elif current and (m := HUNK.match(line)):
             old = int(m[1]) if m[1] is not None else 1

@@ -8,10 +8,24 @@ one, and what the pipeline does about them.
 
 | Actor | Trusted for | Not trusted for |
 |---|---|---|
-| Caller's workflow file (reviewed, on the default branch) | inputs, commands, permissions granted | — |
+| Caller's workflow file and `golden.toml` | inputs, commands, permissions granted, thresholds | anything while they are *changed by the PR under test* (see below) |
 | Pull request code (possibly from a fork) | nothing | running with secrets, writing caches the default branch reads, publishing |
 | Third-party actions and tools | the exact commit / digest / version pinned | anything a tag currently points to |
 | This repository | the commit the caller pinned | a moving tag or branch |
+
+**A pull request runs its own version of the caller's workflow.** On `pull_request` events,
+GitHub runs `ci.yml` as it is on the PR head, not on the default branch, and `golden.toml` is
+read from the checkout too. A PR can therefore grade itself: set `mutation: false` or
+`security: false`, point `test-command` at a pre-made report, or relax a threshold to its
+floor, and `ci / golden` still goes green. Controls, from weakest to strongest:
+
+- CODEOWNERS on `/.github/` and `golden.toml` (as in this repository), and a ruleset with
+  **Require review from Code Owners**. Without that ruleset setting, CODEOWNERS only requests a
+  review; it doesn't require one.
+- **Required workflows** in an organisation ruleset ("Require workflows to pass before
+  merging"): the organisation pins `golden.yml` and its inputs centrally, and they run from the
+  central definition, not the PR's copy. This is the control that makes the pipeline a platform
+  guarantee instead of a convention.
 
 ## Threats and controls
 
