@@ -167,10 +167,23 @@ development:
     subprocesses inherited `MUTANT_UNDER_TEST`.
   - The runner now scrubs it (`97ec171`).
   - The gate refused the crashed report as "not a pass" instead of reading it as "no mutants".
-- **The red-team review** ([2026-10-22](redteam/2026-10-22-review.md)) found 15 issues by
-  attacking the pipeline as an adopter would. All have a fix and a regression scenario. One
-  example: `release.yml` accepted any check run named `ci`, which any GitHub App can create
-  (`3ebe7c1`).
+- **The benchmark caught an escape in a new gate before it merged.**
+  - The first version of the arid-line mutant filter scored 100% on mutation testing of its own
+    functions.
+  - The benchmark still found that `console.log(applyDiscount(x > 100))` hid the mutants of the
+    call inside it, so the mutation gate passed.
+  - The filter was tightened before merge (`99ebf4a`), and the scenario now guards it. Unit
+    tests check that code does what its author meant; only decision-level ground truth catches a
+    gate that is wrong by design.
+- **The red-team review** ([2026-10-22](redteam/2026-10-22-review.md)) found 18 issues by
+  attacking the pipeline as an adopter would. All 18 are fixed.
+  - 13 have a benchmark scenario or a drill that fails if the fix regresses.
+  - The other 5 are covered elsewhere:
+    - The owner-review control needs the GitHub API, so it has unit tests.
+    - Three are workflow changes, checked by actionlint and zizmor.
+    - One is a documentation fix, checked by the alignment test.
+  - One example: `release.yml` accepted any check run named `ci`, which any GitHub App can create
+    (`3ebe7c1`).
 
 ## 6. What this does not prove
 
