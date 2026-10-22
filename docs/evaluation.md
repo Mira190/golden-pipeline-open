@@ -67,7 +67,7 @@ Dependency-Update-Tool and Security-Policy; 8 or higher on Branch-Protection and
 |---|---|---|---|
 | Diff coverage | % of changed coverable lines executed by tests | ≥ 90% (floor 80) | Google's "exemplary" level; per-change, so it doesn't punish legacy code |
 | Mutation score (changed code) | (killed + timeout) / valid mutants | ≥ 80% (floor 60) | coverage is weakly correlated with fault detection; mutants are coupled to 70–73% of real faults |
-| Flake rate | runs with inconsistent results on the same commit / all runs | < 0.5% | Google reported 1.5% in 2016 and about 0.15% by 2020 (*SWE at Google* ch. 11); tests lose value approaching 1% |
+| Flake rate | runs with inconsistent results on the same commit / all runs. `golden flaky-scan` (`scheduled.yml`) measures it nightly as flaky tests / tests seen over N runs of one commit (`flaky_percent` in `flaky-scan.json`), which is stricter than the per-run rate | < 0.5% | Google reported 1.5% in 2016 and about 0.15% by 2020 (*SWE at Google* ch. 11); tests lose value approaching 1% |
 | Escaped-defect rate | production defects a gate should have caught / all production defects | falling quarter over quarter | the ground truth for every other metric |
 | Gate false-positive rate | gate failures judged wrong by the author and confirmed by a reviewer / all gate failures | < 5% | above that, people learn to route around the gate. Every confirmed case becomes a `legit` scenario in [`evals/`](../evals/README.md) |
 | Waiver count and age | active waivers, days to expiry | trending to 0 | waivers are debt with a due date |

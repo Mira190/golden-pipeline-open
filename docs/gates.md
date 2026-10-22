@@ -88,6 +88,28 @@ they're written (Luo et al., FSE 2014), so this is the cheapest point to catch t
 | Node | N fresh `vitest run --sequence.shuffle <files>` processes |
 | Go | `go test -race -shuffle=on -count=N <packages>` |
 
+### After the merge: the flaky-test scan
+
+The flake gate covers the tests a change touches. Tests that turned flaky later, through a
+dependency, a timing change or a shared fixture, are found after the merge.
+
+- **The run.** [`scheduled.yml`](../.github/workflows/scheduled.yml), called nightly from
+  [`templates/ci-scheduled.yml`](../templates/ci-scheduled.yml), runs the whole suite `runs`
+  times (default 5) in random order on one commit of the default branch.
+- **The comparison.** `golden flaky-scan` compares the JUnit XML or `go test -json` reports:
+  - A test that both passed and failed is **flaky**.
+  - A test that failed in every run is **always failing**, which means the default branch is red.
+- **The outcome.** Either finding turns the run red and lists the tests and the flaky rate in the
+  job summary.
+- **Fail closed.** Fewer than two reports, or a missing, empty or unparsable report, exits 2 and
+  never reads as clean.
+
+The scan is not a merge gate and needs only `contents: read`. Track the rate: Google reports
+that "as you approach 1% flakiness, the tests begin to lose value", and that its own rate
+"hovers around 0.15%" ([SWE at Google, ch. 11](https://abseil.io/resources/swe-book/html/ch11.html)).
+Re-running a failed test only "delay[s] the need to address the root cause", so the scan reports
+flaky tests rather than retrying them away.
+
 ## Mutation testing
 
 **Question:** would these tests notice a bug?

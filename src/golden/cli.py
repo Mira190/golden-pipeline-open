@@ -22,6 +22,7 @@ from golden import (
     config,
     coverage,
     dora,
+    flakescan,
     gitdiff,
     impact,
     local,
@@ -337,6 +338,20 @@ def cmd_dora(args: argparse.Namespace) -> int:
     return 0
 
 
+# ----------------------------------------------------------------- flaky-scan
+def cmd_flaky_scan(args: argparse.Namespace) -> int:
+    if args.print_command:
+        print(flakescan.REPORT_COMMANDS[args.print_command])
+        return 0
+    result = flakescan.scan(args.report, args.format)
+    for level, message in flakescan.findings(result):
+        annotate(level, message)
+    if args.json:
+        args.json.write_text(json.dumps(flakescan.as_dict(result), indent=2) + "\n")
+    summary(flakescan.render(result))
+    return 0 if result.clean else 1
+
+
 # ----------------------------------------------------------------- local
 def cmd_local(args: argparse.Namespace) -> int:
     inputs = json.loads(os.environ.get("GOLDEN_INPUTS") or "{}")
@@ -377,6 +392,20 @@ def _add_local_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
     p.add_argument("--mutation", action="store_true", help="also mutate the changed code")
     p.add_argument("--dry-run", action="store_true", help="print the steps, run nothing")
     p.set_defaults(func=cmd_local)
+
+
+def _add_flaky_scan_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    p = sub.add_parser("flaky-scan", help="find flaky tests in the reports of repeated runs")
+    p.add_argument("report", type=Path, nargs="*", help="one test report per run, same commit")
+    p.add_argument("--format", choices=["auto", *flakescan.PARSERS], default="auto")
+    p.add_argument("--json", type=Path, help="write the results here as JSON")
+    p.add_argument(
+        "--print-command",
+        choices=sorted(flakescan.REPORT_COMMANDS),
+        metavar="LANGUAGE",
+        help="print the default command that writes one report to $GOLDEN_REPORT, then exit",
+    )
+    p.set_defaults(func=cmd_flaky_scan)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -442,6 +471,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_scorecard)
 
     _add_local_parser(sub)
+
+    _add_flaky_scan_parser(sub)
 
     p = sub.add_parser("dora", help="compute DORA metrics from a deployment log")
     p.add_argument("log", type=Path)

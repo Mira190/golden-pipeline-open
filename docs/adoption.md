@@ -18,6 +18,14 @@ jobs:
 Dependabot (`package-ecosystem: github-actions`) keeps the SHA and the `# v1.0.0` comment up to
 date. One bump upgrades the YAML and the gate logic together.
 
+To find tests that turn flaky after they merge, also copy
+[`templates/ci-scheduled.yml`](../templates/ci-scheduled.yml) to
+`.github/workflows/flaky-scan.yml`, pin the same SHA and set `language`. It runs nightly on the
+default branch.
+
+- Don't make it a required check: it never runs on pull requests.
+- GitHub disables scheduled workflows after 60 days without repository activity.
+
 ## 2. Configure the repository
 
 **Ruleset.** Settings → Rules → Rulesets → New branch ruleset, targeting the default branch:

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+Post-submit flaky-test scan:
+
+- `golden flaky-scan` compares the reports of repeated runs of one commit (JUnit XML from pytest
+  or Vitest, `go test -json`). It lists flaky tests (passed and failed) and always-failing tests,
+  and reports the flaky rate. Fewer than two reports, or a missing, empty or unparsable report,
+  is an error, never a clean result.
+- The new reusable workflow `scheduled.yml`, called nightly from `templates/ci-scheduled.yml`,
+  runs the suite N times in random order on the default branch with `contents: read`.
+
 Scorecard L4 gains three controls (21 in all):
 
 - `merge-queue`: the default branch's rules include a merge queue.
