@@ -148,6 +148,22 @@ def changed_anywhere(base: str, pathspecs: list[str], *, cwd: Path | None = None
     return sorted(name for name in out.split("\0") if name)
 
 
+def numstat(base: str, *, cwd: Path | None = None) -> dict[str, int]:
+    """Lines added plus deleted per file (renames under the new name, binaries count 0)."""
+    out = _git(*DIFF_OPTS, "diff", "--numstat", "-z", "--relative", f"{base}...HEAD", cwd=cwd)
+    sizes: dict[str, int] = {}
+    tokens = iter(out.split("\0"))
+    for token in tokens:
+        if not token:
+            continue
+        added, deleted, path = token.split("\t", 2)
+        if not path:  # rename: "<a>\t<d>\t", then the old and new names
+            next(tokens, "")
+            path = next(tokens, "")
+        sizes[path] = sum(int(n) for n in (added, deleted) if n.isdigit())
+    return sizes
+
+
 def merge_base(ref: str, *, cwd: Path | None = None) -> str:
     return _git("merge-base", "HEAD", ref, cwd=cwd).strip()
 

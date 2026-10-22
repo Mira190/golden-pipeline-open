@@ -208,6 +208,18 @@ ignoreUntil = 2026-12-31   # required, at most 90 days ahead
 `ignoreUntil` at most 90 days ahead. It lists every exception in the job summary. After the date,
 OSV-Scanner enforces the advisory again. Protect `osv-scanner.toml` with CODEOWNERS.
 
+## Change size (signal, not a gate)
+
+**Question:** can a reviewer still read this change properly?
+
+The plan job counts the changed lines a reviewer has to read. Lockfiles, snapshots and
+`presence.exempt` files are left out. Above 400 lines it adds a warning annotation that suggests
+splitting the PR. It never blocks: at large engineering organisations small changes are a norm
+backed by tooling, not a hard limit. A mechanical rename or a generated migration is legitimately
+large. Review effectiveness does fall off sharply past a few hundred lines (Google's small-CL
+guidance; the SmartBear/Cisco study of 2,500 reviews), and AI-assisted authoring makes large diffs
+cheap to produce, which makes the signal more valuable.
+
 ## Verdict
 
 The `golden` job aggregates everything above. Make it the **only** required status check:

@@ -8,6 +8,15 @@ Second-person rules:
   and only when that can be verified (`golden.optout`). A self-applied or unverifiable label is
   ignored with a warning, and the gate stays enforced.
 
+Signals and hermeticity:
+
+- The Python default test and flake commands use pytest-timeout 2.5.0 with `--timeout=300`, so a
+  hung test fails with a stack trace instead of using up the job timeout.
+- The plan job reports `change-size`, the lines a reviewer must read. Above 400 lines it adds a
+  non-blocking warning that suggests splitting the PR.
+- `scripts/drill.py` has a `forged-coverage` scenario: a conftest rewrites `coverage.xml`. Diff
+  coverage is fooled by design, and the drill proves that mutation testing still blocks.
+
 Vulnerabilities are owned by whoever introduced them:
 
 - OSV-Scanner is report-only on pull requests and in the merge queue, and blocking on

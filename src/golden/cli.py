@@ -100,6 +100,8 @@ def cmd_plan(args: argparse.Namespace) -> int:
     for path in gating:
         annotate("warning", plan.GATING_WARNING, file=path)
     outputs["gating-changes"] = " ".join(gating)
+    if int(outputs["change-size"]) > plan.LARGE_CHANGE:
+        annotate("warning", plan.large_change_warning(int(outputs["change-size"])))
     target = os.environ.get("GITHUB_OUTPUT")
     if target:
         plan.write_outputs(outputs, Path(target))

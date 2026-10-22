@@ -215,6 +215,28 @@ def gating_changes(base: str, policy_path: Path) -> list[str]:
     return gitdiff.changed_anywhere(base, [*GATING_FILES, policy])
 
 
+# Review effectiveness falls off past a few hundred lines (Google's small-CL
+# guidance; the SmartBear/Cisco review study). A signal for authors, not a gate.
+LARGE_CHANGE = 400
+NOT_REVIEWED_LINE_BY_LINE = ("*.lock", "package-lock.json", "go.sum", "**/__snapshots__/**")
+
+
+def change_size(base: str, exempt: tuple[str, ...]) -> int:
+    """Lines a reviewer must read: lockfiles, snapshots and exempt (generated) files excluded."""
+    if not base:
+        return 0
+    skip = (*NOT_REVIEWED_LINE_BY_LINE, *exempt)
+    return sum(n for path, n in gitdiff.numstat(base).items() if not match_any(path, skip))
+
+
+def large_change_warning(size: int) -> str:
+    return (
+        f"Large change: {size} changed lines to review (excluding lockfiles and exempt files). "
+        f"Reviews of more than {LARGE_CHANGE} lines catch proportionally fewer defects; "
+        "consider splitting it into smaller pull requests."
+    )
+
+
 def build(
     language: str,
     inputs: dict[str, Any],
@@ -230,6 +252,7 @@ def build(
         "base": base,
         "event": event.name,
         "repeats": f"{policy.get('flaky.repeats'):g}",
+        "change-size": str(change_size(base, policy.exempt)),
         # Set by `golden plan` from optout.decide, which needs the API.
         "presence-report-only": "false",
         "presence-opt-out": "",
@@ -260,6 +283,7 @@ def render(language: str, outputs: dict[str, str]) -> str:
         "mutate",
         "gating-changes",
         "presence-opt-out",
+        "change-size",
     )
     rows = [
         f"| {k} | `{outputs[k].replace('|', '\\|').replace(chr(10), ' ⏎ ')}` |"

@@ -135,3 +135,13 @@ def test_changed_anywhere_sees_the_whole_repository(repo, monkeypatch):
         "svc/golden.toml",
     ]
     assert gitdiff.changed_anywhere(base, ["*.py"]) == []  # literal, not a glob
+
+
+def test_numstat_counts_added_and_deleted_lines(repo):
+    repo.commit({"a.py": "1\n2\n3\n", "old.py": "".join(f"{i}\n" for i in range(50))})
+    base = repo.git("rev-parse", "HEAD")
+    repo.git("mv", "old.py", "new name.py")
+    repo.commit({"a.py": "1\nTWO\n3\n4\n", "bin.dat": "x"})
+    (repo.root / "bin.dat").write_bytes(b"\x00\x01")
+    repo.git("commit", "-qam", "binary")
+    assert gitdiff.numstat(base) == {"a.py": 3, "new name.py": 0, "bin.dat": 0}

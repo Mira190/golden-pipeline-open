@@ -334,3 +334,39 @@ def test_python_defaults_bound_every_test_in_time():
         command = plan.DEFAULTS["python"][key]
         assert "--with pytest-timeout==2.5.0" in command
         assert "--timeout=300" in command
+
+
+def test_change_size_skips_lockfiles_snapshots_and_exempt_files(repo):
+    base = repo.commit({"README.md": "x\n"})
+    repo.commit(
+        {
+            "src/a.py": "a\nb\n",
+            "uv.lock": "x\n" * 900,
+            "web/package-lock.json": "x\n" * 900,
+            "ui/__snapshots__/x.snap": "x\n" * 900,
+            "gen/model.py": "x\n" * 900,
+        }
+    )
+    assert plan.change_size(base, ("gen/**",)) == 2
+    assert plan.change_size("", ()) == 0
+
+
+def test_build_reports_change_size(repo):
+    base = repo.commit({"README.md": "x\n"})
+    repo.commit({"a.py": "1\n2\n3\n"})
+    assert plan.build("python", {}, pr_event(base), POLICY, repo.root)["change-size"] == "3"
+
+
+@pytest.mark.parametrize(
+    ("lines", "warned"), [(plan.LARGE_CHANGE, False), (plan.LARGE_CHANGE + 1, True)]
+)
+def test_cli_plan_warns_about_large_changes(repo, monkeypatch, tmp_path, capsys, lines, warned):
+    base = repo.commit({"README.md": "x\n"})
+    repo.commit({"big.py": "x = 1\n" * lines})
+    event = tmp_path / "event.json"
+    event.write_text(json.dumps({"pull_request": {"base": {"sha": base}, "labels": []}}))
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event))
+    assert cli.main(["plan", "--language", "python"]) == 0
+    out = capsys.readouterr().out
+    assert (f"::warning::Large change: {lines} changed lines" in out) is warned
