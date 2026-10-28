@@ -643,6 +643,8 @@ CHILD = (
     "import json, os, sys\n"
     "json.dump({k: os.environ.get(k) for k in ('GITHUB_TOKEN', 'CI', 'PYTHONHASHSEED')}"
     " | {'cwd': os.getcwd()}, sys.stdout)\n"
+    # Flush the text layer first, or the raw byte overtakes it when stdout is buffered.
+    "sys.stdout.flush()\n"
     "sys.stdout.buffer.write(b'\\xff')\n"
     "sys.stdout.flush()\n"
     "sys.stderr.write('warn')\n"

@@ -42,6 +42,9 @@ default branch.
 
 **Security settings** (free for public repositories):
 
+- the **dependency graph**. The security job's dependency review needs it, and without it every
+  pull request fails with "Dependency review is not supported on this repository" (Settings →
+  Advanced Security, or Code security, depending on your plan)
 - secret scanning with push protection
 - Dependabot alerts
 - private vulnerability reporting

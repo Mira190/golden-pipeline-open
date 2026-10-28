@@ -40,14 +40,15 @@ runs:
       env:
         GOLDEN_SRC: ${{ github.action_path }}/../..
         UV_PROJECT_ENVIRONMENT: ${{ runner.temp }}/golden-cli
-        GOLDEN_BIN: ${{ runner.temp }}/golden-bin
-      # Only the `golden` entry point goes on PATH: the environment's own python
-      # must never shadow the project's interpreter in later steps.
+      # setup-uv puts uv's tool bin directory on PATH, so linking the `golden`
+      # entry point there makes it available to every later step without writing
+      # $GITHUB_PATH. Only that one entry point is linked: the environment's own
+      # python must never shadow the project's interpreter in later steps.
       run: |
         uv sync --project "$GOLDEN_SRC" --locked --no-dev --no-editable --python 3.13 --quiet
-        mkdir -p "$GOLDEN_BIN"
-        ln -sf "$UV_PROJECT_ENVIRONMENT/bin/golden" "$GOLDEN_BIN/golden"
-        echo "$GOLDEN_BIN" >> "$GITHUB_PATH"
+        bin="$(uv tool dir --bin)"
+        mkdir -p "$bin"
+        ln -sf "$UV_PROJECT_ENVIRONMENT/bin/golden" "$bin/golden"
 
     - if: inputs.language == 'node'
       uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0

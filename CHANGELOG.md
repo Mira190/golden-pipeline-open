@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+CI fixes from the first real run:
+
+- `actions/setup` links the `golden` entry point into uv's tool bin directory, which setup-uv
+  already puts on PATH, instead of writing `$GITHUB_PATH`. zizmor's `github-env` audit flagged the
+  write.
+- A test of the real-fault harness assumed unbuffered stdout. It passed where `PYTHONUNBUFFERED`
+  was set and failed on GitHub's runners.
+- The adoption guide lists the dependency graph as a prerequisite of the security job.
+
 Fuzzing the gate parsers:
 
 - `tests/test_fuzz.py` fuzzes every parser that reads an input a pull request or a tool can shape,
