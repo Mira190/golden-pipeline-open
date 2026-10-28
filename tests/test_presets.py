@@ -19,6 +19,10 @@ def test_unknown_preset():
         ("pkg/mod.py", True, False),
         ("tests/test_mod.py", False, True),
         ("tests/helpers.py", False, True),
+        ("shop/tests.py", False, True),
+        ("pkg/tests/factories.py", False, True),
+        ("lib/test/support.py", False, True),
+        ("pkg/testing.py", True, False),
         ("pkg/mod_test.py", False, True),
         ("conftest.py", False, True),
         ("docs/conf.py", False, False),
@@ -42,6 +46,9 @@ def test_python_classification(path, source, test):
         ("src/pricing.spec.mjs", False, True),
         ("src/__tests__/x.ts", False, True),
         ("test/pricing.ts", False, True),
+        ("src/test/setup.ts", False, True),
+        ("packages/web/tests/helpers.ts", False, True),
+        ("src/testing.ts", True, False),
         ("src/types.d.ts", False, False),
         ("vitest.config.ts", False, False),
         ("dist/index.js", False, False),
@@ -189,3 +196,236 @@ def test_go_references_same_package(source, test, expected):
 )
 def test_go_mutation_target_is_the_package(source, expected):
     assert GO.mutation_targets(source, [(1, 1)], "") == [expected]
+
+
+@pytest.mark.parametrize(
+    ("preset", "path", "runnable"),
+    [
+        (PY, "tests/test_mod.py", True),
+        (PY, "pkg/mod_test.py", True),
+        (PY, "shop/tests.py", True),
+        (PY, "tests/conftest.py", False),
+        (PY, "tests/helpers.py", False),
+        (PY, "pkg/tests/factories.py", False),
+        (PY, "src/pkg/test_utils.py", True),
+        (NODE, "src/pricing.test.ts", True),
+        (NODE, "src/pricing.spec.mjs", True),
+        (NODE, "src/__tests__/pricing.ts", False),
+        (NODE, "src/__tests__/pricing.test.ts", True),
+        (NODE, "src/__tests__/fixture.json", False),
+        (NODE, "test/fixtures/order.json", False),
+        (NODE, "src/test/setup.ts", False),
+        (GO, "pricing/pricing_test.go", True),
+        (GO, "pricing/testdata/case.json", False),
+    ],
+)
+def test_runnable_tests(preset, path, runnable):
+    assert preset.is_runnable_test(path) is runnable
+
+
+@pytest.mark.parametrize(
+    ("source", "test", "text", "expected"),
+    [
+        # Relative imports resolve against the test's own package.
+        ("shop/models.py", "shop/tests.py", "from .models import total", True),
+        ("pkg/core.py", "pkg/tests/test_core.py", "from ..core import f", True),
+        ("pkg/core.py", "pkg/tests/test_core.py", "from .. import core", True),
+        ("src/pkg/core.py", "src/pkg/tests/test_x.py", "from ..core import f", True),
+        ("pkg/sub/core.py", "pkg/tests/test_x.py", "from ..sub.core import f", True),
+        ("pkg/core.py", "pkg/tests/__init__.py", "from ..core import f", True),
+        ("other/core.py", "pkg/tests/test_core.py", "from ..core import f", False),
+        ("pkg/core.py", "pkg/tests/test_core.py", "from .core import f", False),
+        ("pkg/core.py", "pkg/tests/test_core.py", "from ....core import f", False),
+        # A comment is not a reference; code and strings (mock targets) are.
+        ("billing/tax.py", "tests/test_x.py", "# TODO: tax\nimport os", False),
+        ("billing/tax.py", "tests/test_x.py", "import os  # billing.tax later", False),
+        ("billing/tax.py", "tests/test_x.py", "x = '# not a comment: tax'", True),
+        ("billing/tax.py", "tests/test_x.py", "mock.patch('billing.tax.rate')", True),
+        # Unparseable test files still get the lenient textual match.
+        ("billing/tax.py", "tests/test_x.py", "def broken(:\n    tax", True),
+        ("billing/tax.py", "tests/test_x.py", 'x = """\ntax', True),
+    ],
+)
+def test_python_references_imports_and_comments(source, test, text, expected):
+    assert PY.references(source, test, text) is expected
+
+
+@pytest.mark.parametrize(
+    ("source", "text", "expected"),
+    [
+        ("src/order.service.ts", "import { a } from './order.service'", True),
+        ("src/order.service.ts", "import { a } from './order.service.js'", True),
+        ("src/order.service.ts", "import { a } from './order'", False),
+        ("src/cart/index.ts", "import { a } from './cart/index.js'", True),
+        ("src/cart/index.ts", "import { a } from './cart/index'", True),
+        ("src/cart/index.ts", "import { a } from './cart/indexer'", False),
+        ("src/pricing.ts", "import { a } from './pricing/index.js'", False),
+    ],
+)
+def test_node_references_dotted_names_and_index(source, text, expected):
+    assert NODE.references(source, "src/app.test.ts", text) is expected
+
+
+def test_node_test_named_after_dotted_source():
+    assert NODE.references("src/order.service.ts", "src/order.service.spec.ts", "")
+    assert NODE.references("src/order.service.ts", "src/order.test.ts", "")
+
+
+@pytest.mark.parametrize(
+    ("preset", "path", "runnable"),
+    [
+        ("python", "tests/test_a.py", True),
+        ("python", "pkg/a_test.py", True),
+        ("python", "tests/conftest.py", False),
+        ("python", "tests/helpers.py", False),
+        ("python", "src/test_like_name.py", True),
+        ("node", "src/a.spec.tsx", True),
+        ("node", "test/setup.ts", False),
+        ("node", "src/a.ts", False),
+        ("go", "p/p_test.go", True),
+        ("go", "p/p.go", False),
+    ],
+)
+def test_runnable_tests_by_preset_name(preset, path, runnable):
+    assert presets.get(preset).is_runnable_test(path) is runnable
+
+
+PY_FUNCTIONS = """\
+import functools
+
+
+@functools.cache
+def first(a):
+    return a
+
+
+async def second():
+    return 2
+
+
+class Cart:
+    def add(self, x):
+        return x
+
+    def first(self):
+        return 1
+
+
+def broken_nothing():
+    pass
+"""
+
+
+def test_python_function_ranges():
+    assert PY.function_ranges(PY_FUNCTIONS) == {
+        "first": [(4, 6), (17, 18)],
+        "second": [(9, 10)],
+        "add": [(14, 15)],
+        "broken_nothing": [(21, 22)],
+    }
+    assert PY.function_ranges("def broken(:") == {}
+
+
+TS_FUNCTIONS = """\
+import { x } from "./x";
+
+export function bulk(q: number): number {
+  if (q > 10) {
+    return 2;
+  }
+  return 1;
+}
+
+export const half = (n: number): number => n / 2;
+
+export const twice = async (n: number) => {
+  const s = "}";
+  const t = `{`;
+  return n * 2; // }
+};
+
+function* gen() {
+  yield 1;
+}
+
+export default function main() {}
+
+class Cart {
+  private items: number[] = [];
+
+  add(item: number): void {
+    this.items.push(item);
+  }
+
+  async total<T>(fn: (a: number) => T): Promise<number> {
+    if (this.items.length) {
+      return 1;
+    }
+    return 0;
+  }
+}
+
+const data = { a: 1 };
+const fn = function named() {
+  return 1;
+};
+const unterminated = () => {
+"""
+
+
+def test_node_function_ranges():
+    assert NODE.function_ranges(TS_FUNCTIONS) == {
+        "bulk": [(3, 8)],
+        "half": [(10, 10)],
+        "twice": [(12, 16)],
+        "gen": [(18, 20)],
+        "main": [(22, 22)],
+        "add": [(27, 29)],
+        "total": [(31, 36)],
+        "fn": [(40, 42)],
+        "unterminated": [(43, 43)],
+    }
+
+
+def test_node_control_flow_is_not_a_method():
+    text = (
+        "class A {\n  run() {\n    if (x) {\n      y();\n    }\n    for (a of b) {\n    }\n  }\n}\n"
+    )
+    assert NODE.function_ranges(text) == {"run": [(2, 8)]}
+
+
+GO_FUNCTIONS = """\
+package pricing
+
+func One() int { return 1 }
+
+// Total sums.
+func (c *Cart) Total(x int) int {
+\tif x > 1 {
+\t\treturn 2
+\t}
+\treturn x
+}
+
+func Map[T any](xs []T) []T {
+\treturn xs
+}
+
+func Broken() int {
+\treturn 1
+"""
+
+
+def test_go_function_ranges():
+    assert GO.function_ranges(GO_FUNCTIONS) == {
+        "One": [(3, 3)],
+        "Total": [(6, 11)],
+        "Map": [(13, 15)],
+        "Broken": [(17, 17)],
+    }
+
+
+def test_brace_end_without_a_block_ends_at_the_statement():
+    lines = ["const f = (a) =>", "  a + 1;", "next();"]
+    assert presets._brace_end(lines, 0) == 1
+    assert presets._brace_end(["const g = () =>", "  1"], 0) == 0

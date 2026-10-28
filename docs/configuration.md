@@ -8,21 +8,29 @@ There are two layers:
 
 ## golden.toml
 
-| Key | Default | Floor | Meaning |
-|---|---|---|---|
-| `coverage.diff_min` | 90 | ≥ 80 | minimum % of changed coverable lines covered |
-| `coverage.ratchet_tolerance` | 0.5 | ≤ 2 | allowed drop in total coverage (percentage points) vs the default branch |
-| `mutation.min_score` | 80 | ≥ 60 | minimum mutation score on changed code |
-| `flaky.repeats` | 10 | ≥ 3 | times each changed test is re-run |
-| `scorecard.min_level` | 2 | ≥ 1 | minimum repository maturity level |
-| `presence.exempt` | `[]` | – | extra globs excluded from the test-presence gate and mutation |
+| Key | Default | Floor | Strictest | Meaning |
+|---|---|---|---|---|
+| `coverage.diff_min` | 90 | ≥ 80 | ≤ 100 | minimum % of changed coverable lines covered |
+| `coverage.ratchet_tolerance` | 0.5 | ≤ 2 | ≥ 0 | allowed drop in total coverage (percentage points) vs the default branch |
+| `mutation.min_score` | 80 | ≥ 60 | ≤ 100 | minimum mutation score on changed code |
+| `flaky.repeats` | 10 | ≥ 3 | ≤ 100 | times each changed test is re-run (whole number) |
+| `scorecard.min_level` | 2 | ≥ 1 | ≤ 4 | minimum repository maturity level (whole number) |
+| `presence.exempt` | `[]` | – | – | extra globs excluded from the test-presence gate and mutation |
 
 The policy is validated in the first job (`golden policy check`), and the effective values are
-printed to the job summary:
+printed to the job summary. Validation fails closed, because a mistake that silently fell back to
+a default would weaken a gate without anyone noticing:
 
-- Unknown sections fail validation.
-- Non-numeric values fail validation.
+- Unknown sections fail validation, and so do unknown keys inside a known section, so a typo
+  such as `min_scor = 95` can't silently keep the default.
+- Values that aren't finite numbers fail validation (`nan` and `inf` included), and so do
+  fractional `repeats` or levels.
 - Any value weaker than its floor fails with an explanation.
+- Any value beyond "strictest" fails too: `min_level = 5` or `diff_min = 101` could never pass,
+  so every change would be blocked forever.
+- `presence.exempt` globs must name something: `**`, `*`, `**/*` and bare extension globs such
+  as `*.py` would exempt a whole language. They are rejected, and a time-boxed
+  `[waivers.test-presence]` is the way to switch the gate off.
 
 ```toml
 [coverage]
@@ -38,6 +46,25 @@ exempt = ["src/generated/**", "**/legacy_adapter.py"]
 
 Protect the file with CODEOWNERS, so changes to the bar get the same review as code.
 
+### A change never grades itself
+
+On a pull request (and in the merge queue) every gate reads `golden.toml` as it is on the
+**base commit**, then lets the change tighten it but never loosen it:
+
+| The pull request… | Applies to this pull request? |
+|---|---|
+| raises a threshold, shortens a waiver, removes a waiver or an exemption | yes, immediately |
+| lowers a threshold (still above the floor) | no: the merged value applies until it is merged |
+| adds or extends a waiver | no: the merged waiver (or none) applies |
+| adds a `presence.exempt` glob | no |
+| deletes `golden.toml` | no: the merged values still apply |
+
+What was deferred is listed under **Not applied to this change** in the policy summary and as a
+notice annotation. The base comes from `--base` or, in Actions, from the triggering event; on a
+push to the default branch there is no base and the file is read as is. If the merged file is
+itself invalid under the current rules (for example after a platform floor was raised), the
+pull request that repairs it is judged by its own policy.
+
 ### Waivers
 
 A waiver turns one gate into report-only for a limited time:
@@ -48,9 +75,9 @@ reason = "inherited module without tests; tracked in PLAT-123"
 expires = 2026-12-31
 ```
 
-- Allowed gates: `diff-coverage`, `coverage-ratchet`, `test-presence`, `mutation`, `scorecard`.
+- Allowed gates: `diff-coverage`, `coverage-ratchet`, `test-presence`, `mutation`, `scorecard`, `sast`.
 - `reason` is required.
-- `expires` is a TOML date at most **90 days** ahead.
+- `expires` is a TOML date (not a date-time) at most **90 days** ahead.
 - After expiry the gate is enforced again automatically.
 - While any waiver is active, the scorecard cannot reach L4.
 
@@ -69,9 +96,10 @@ expires = 2026-12-31
 | `coverage-report` | per language | path relative to `working-directory` |
 | `flaky-command` | per language | receives `$GOLDEN_TESTS`, `$GOLDEN_TEST_PACKAGES`, `$GOLDEN_REPEATS` |
 | `mutation-command` | per language | receives `$GOLDEN_MUTATE`, `$GOLDEN_BASE` |
-| `mutation-report` / `mutation-format` | per language | format: `mutmut`, `stryker`, `gremlins` |
-| `mutation` | `true` | set `false` to skip mutation testing (a waiver is usually better) |
-| `security` | `true` | run the nested security workflow |
+| `mutation-report` / `mutation-format` | per language | format: `mutmut`, `stryker`, `mutation-testing-elements` (alias of `stryker`, for Stryker.NET/Stryker4s), `gremlins` |
+| `mutation` | `true` | set `false` to skip mutation testing; this fails the scorecard's L3 "no gate switched off" control, so prefer a waiver |
+| `security` | `true` | run the nested security workflow; `false` fails the same L3 control |
+| `workflow-lint` | `true` | lint `.github/workflows` with actionlint and shellcheck (in `security`); `false` fails the same L3 control |
 | `skip-presence-label` | `no-tests-needed` | PR label that makes test presence report-only |
 | `runs-on` | `ubuntu-24.04` | runner label |
 | `egress-policy` | `audit` | harden-runner policy; `block` needs an allowlist |
@@ -90,13 +118,16 @@ and was at least 7 days old when pinned.
 | format | `uvx ruff@0.17.0 format --check --diff .` |
 | lint | `uvx ruff@0.17.0 check --output-format=github .` |
 | typecheck | `uv run --with mypy==2.4.0 mypy .` |
-| test | `uv run --with pytest-cov==7.1.0 --with pytest-xdist==3.8.0 --with pytest-randomly==5.0.0 pytest -n auto -p randomly --cov --cov-report=xml:coverage.xml` |
+| test | `uv run --with pytest-cov==7.1.0 --with pytest-xdist==3.8.0 --with pytest-randomly==5.0.0 --with pytest-timeout==2.5.0 pytest -n auto -p randomly --timeout=300 --cov --cov-report=xml:coverage.xml --cov-report=term` |
 | mutation | `mutmut run $GOLDEN_MUTATE && mutmut export-cicd-stats` (mutmut 3.8.0) |
 
 Requirements:
 
 - a `uv.lock`
 - pytest in your dev dependencies (the plugins are added with `--with`)
+- tests that finish within 300 s each. `--timeout=300` kills a hung test with a stack trace, the
+  ceiling of a Google "medium" test. Vitest (5 s) and `go test` (10 min) have defaults of their
+  own. Mark a slower test with `@pytest.mark.timeout(...)`.
 - `[tool.coverage.run] relative_files = true`
 - a `[tool.mutmut]` section (`source_paths = ["src/yourpkg/"]`)
 
@@ -145,6 +176,78 @@ Requirements: a `go.mod`. A `.golangci.yml` (config `version: "2"`) is recommend
 Inputs: `working-directory`, `fail-on-severity` (`high`), `allow-licenses` (empty = no licence
 gate), `runs-on`, `egress-policy`. It needs only `contents: read`.
 
+#### Known vulnerabilities (OSV)
+
+OSV-Scanner scans every lockfile under `working-directory` (`--recursive`). What blocks depends on
+the event that triggered the caller:
+
+| Event | Scan | Blocks on |
+|---|---|---|
+| `pull_request`, `merge_group` | the base commit (`pull_request.base.sha` or `merge_group.base_sha`) and the change, diffed | a vulnerability in the change that is not in the base |
+| `push`, `schedule`, `workflow_dispatch` | the checked-out commit | every known vulnerability not excepted in `osv-scanner.toml` |
+
+On pull requests the job summary also lists the vulnerabilities that were already in the base, so
+nothing is hidden. See [what the gate does](gates.md#vulnerable-dependencies-what-the-change-adds-then-everything).
+
+Requirements and behaviour:
+
+- On pull requests and in the merge queue the checkout fetches full history, so the base commit is
+  available. The runner needs `jq`, which GitHub-hosted runners include.
+- A project with no lockfiles passes. A change that creates the project (no lockfiles or no
+  `working-directory` in the base) counts everything in the change as new.
+- A scan that cannot complete is an error. A missing results file, or a head scan that failed
+  without reporting anything (an unparsable lockfile), never reads as "nothing new".
+- Advisories published after a merge are caught by the default-branch run, so call the workflow
+  from a schedule as well. The file header shows standalone use; a nightly caller is:
+
+```yaml
+name: security-nightly
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+permissions: {}
+jobs:
+  security:
+    permissions:
+      contents: read
+    uses: Mira190/golden-pipeline-open/.github/workflows/security.yml@<sha> # v1.x.y
+```
+
+#### osv-scanner.toml
+
+Exceptions are read natively by OSV-Scanner from an `osv-scanner.toml` in the **same directory as
+the lockfile**. The file applies to that directory only, not to child directories, so a monorepo
+needs one next to each lockfile it excepts.
+
+```toml
+# osv-scanner.toml, next to package-lock.json
+[[IgnoredVulns]]
+id = "GHSA-xxxx-xxxx-xxxx"   # aliases of this ID are ignored with it
+ignoreUntil = 2026-12-31     # TOML date; after it the vulnerability blocks again
+reason = "Not reachable: we never parse untrusted input with this library. Tracked in PLAT-123."
+```
+
+This is the same reason-plus-expiry model as a [`golden.toml` waiver](#waivers), where `expires`
+may be at most 90 days ahead. OSV-Scanner itself treats `reason` and `ignoreUntil` as optional,
+so the pipeline enforces them:
+
+- `golden policy check` (the first step of every run) rejects an `[[IgnoredVulns]]` entry with
+  no `id`, no `reason`, no `ignoreUntil`, or an `ignoreUntil` more than 90 days ahead. It lists
+  every exception in the job summary.
+- **A change never grades itself.** On pull requests and in the merge queue, `security.yml` reads
+  every `osv-scanner.toml` from the base commit, so a pull request cannot except a vulnerability
+  it introduces. An exception it adds applies after merge, and an annotation says so.
+- Put `osv-scanner.toml` behind CODEOWNERS, next to `golden.toml` (this repository uses
+  `**/osv-scanner.toml`).
+- `[[PackageOverrides]]` (`ignore = true`, `effectiveUntil = ...`) silences findings too. Review
+  it the same way.
+- An invalid file is ignored with an error, so its exceptions stop applying and the vulnerabilities
+  come back.
+
+Once an exception expires, the vulnerability blocks the default-branch run again. On pull requests
+it is a pre-existing vulnerability: listed in the summary, not blocking.
+
 ### container.yml
 
 Inputs:
@@ -159,3 +262,112 @@ Inputs:
 
 Output: `digest`. The caller must grant `contents: read`, `packages: write`, `id-token: write` and
 `attestations: write`; publishing happens only on pushes to the default branch.
+
+### Static analysis on the diff (optional)
+
+`sast.yml` runs [CodeQL](https://codeql.github.com/) and blocks a pull request only for the
+findings **it introduces**: the ones on lines the change added or modified. Findings in code the
+change does not touch are counted ("3 pre-existing findings outside this change"), never block
+and are never annotated. Showing an author the problem on the line they just edited, at review
+time, is how large codebases keep static analysis trusted and acted on (Google's Tricorder,
+Meta's Infer); a list of old findings nobody owns is not.
+
+The workflow does not upload anything to code scanning, so it needs no `security-events: write`
+and its findings do not appear in the Security tab. Keep a separate `codeql.yml` if you want
+them there.
+
+Call `sast.yml` as its own job next to `golden.yml`, not from inside it. It needs `actions: read`,
+which callers of `golden.yml` don't grant. To make it block merges, have your aggregating job
+`need` it, as [`templates/ci-container.yml`](../templates/ci-container.yml) does, or add it to the
+required checks. A Go project needs `build-mode: autobuild`. Run one job per language, for
+example with a matrix, as this repository's `ci.yml` does. If you also keep a `codeql.yml` that
+uploads to code scanning, run it on pushes to the default branch and on a schedule only. That
+way CodeQL doesn't run twice per pull request.
+
+| Input | Default | Notes |
+|---|---|---|
+| `languages` | *required* | CodeQL languages, comma-separated: `python`, `javascript-typescript`, `go`, `actions`, ... |
+| `working-directory` | `.` | project directory (CodeQL's source root); reported paths and `golden.toml` are read relative to it |
+| `min-level` | `error` | lowest level that blocks: `error`, `warning` or `note` |
+| `build-mode` | empty | `none`, `autobuild` or `manual`; empty keeps CodeQL's default, which suits interpreted languages. **Go needs `autobuild`**; the Go toolchain is set up from `go.mod` |
+| `queries` | empty | extra queries or suites, e.g. `security-extended`; empty is CodeQL's default suite, the most precise one |
+| `runs-on` | `ubuntu-24.04` | runner label |
+| `egress-policy` | `audit` | harden-runner policy; `block` needs an allowlist |
+
+```yaml
+jobs:
+  sast:
+    permissions:
+      contents: read
+      actions: read
+    uses: Mira190/golden-pipeline-open/.github/workflows/sast.yml@<sha> # v1.x.y
+    with:
+      languages: python
+```
+
+**Permissions.** The workflow declares `contents: read` (checkout) and `actions: read`, so the
+calling job must grant both, or the run fails to start. CodeQL asks the Actions API which
+workflow run it belongs to even when nothing is uploaded; in a private repository that call
+needs `actions: read`, in a public one it works without. Without `security-events: read` CodeQL
+logs a warning that it cannot reach the code scanning API and runs without its experimental
+feature flags; the findings gate is unaffected.
+
+**Events.** On a pull request or in the merge queue the base comes from the event, as for every
+gate, and a blocking finding fails the job. On a push the job only reports what that push
+introduced (nothing blocks; a broken report still fails). On any other event there is no change
+to judge and the job says so.
+
+**What counts.**
+
+- A finding is *on the change* when its line range overlaps a changed line; a finding about a
+  file as a whole counts when the file changed.
+- The level is the result's own `level`, else the default of its rule (CodeQL keeps severities
+  there), else `warning`. Results with no severity (`none`, or a `kind` other than `fail`) are
+  ignored.
+- Results suppressed in the source (an accepted `suppressions` entry; one still `underReview` or
+  `rejected` does not hide the finding) and results a baseline marks `unchanged` or `absent` are
+  skipped. In-source suppressions stay visible in the diff, so reviewers can challenge them.
+- At most 50 findings are annotated and listed, the most severe first; every blocking finding
+  still fails the gate.
+
+### `golden sast`
+
+The gate itself is tool-neutral. It reads any SARIF 2.1.0 report:
+
+```bash
+golden sast REPORT.sarif [REPORT.sarif ...] --base "$BASE" [--min-level error|warning|note]
+```
+
+Exit 0 passes (or the gate is waived), exit 1 blocks, and exit 2 means the input is broken. It
+fails closed: a missing or empty report, invalid JSON, a file with no `runs` list, a result
+without a physical location, an unknown level or an invalid region is exit 2, never a pass. A
+valid report with no results passes. Locations may be relative paths, absolute paths or
+`file://` URIs (with `uriBaseId` resolved through `originalUriBaseIds`); run the gate in the
+directory the paths are relative to.
+
+Any SARIF-emitting tool can feed it, for example Ruff or Semgrep (neither fails the step when it
+finds something, because the gate decides):
+
+```yaml
+- run: ruff check --output-format sarif --output-file ruff.sarif --exit-zero .
+- run: golden sast ruff.sarif --base "$BASE" --min-level warning
+```
+
+```yaml
+- run: semgrep scan --config auto --sarif --output semgrep.sarif
+- run: golden sast semgrep.sarif --base "$BASE"
+```
+
+Several reports (one per language or per tool) can be passed at once; the same finding reported
+twice counts once. Run the CLI as `golden local` is run in [adoption](adoption.md)
+(`uvx --from git+https://github.com/Mira190/golden-pipeline-open@<sha> golden sast ...`), in a
+checkout with full history, and take `BASE` from the event the way `security.yml` does
+(`github.event.pull_request.base.sha || github.event.merge_group.base_sha`).
+
+**Waiver.** Like any gate, it can be switched to report-only for a limited time:
+
+```toml
+[waivers.sast]
+reason = "adopting CodeQL; existing findings tracked in SEC-42"
+expires = 2026-12-31
+```

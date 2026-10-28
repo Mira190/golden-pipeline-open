@@ -47,6 +47,9 @@ include = ["src/golden", "README.md", "LICENSE"]
 [tool.uv]
 # Supply-chain cooldown: never resolve a release younger than 7 days.
 exclude-newer = "7 days"
+# The build backend is a dependency too: pin it, so building the CLI in a consumer's
+# job (actions/setup) is as reproducible as installing its locked dependencies.
+build-constraint-dependencies = ["hatchling==1.32.4"]
 
 [tool.ruff]
 line-length = 100
@@ -66,8 +69,9 @@ max-complexity = 10
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "ANN", "PLR2004", "PLR0913", "PLR0917", "DTZ"]
-"src/golden/{report,cli}.py" = ["T20"]
+"src/golden/{report,cli,local}.py" = ["T20"]
 "scripts/**" = ["T20", "S603", "ANN", "PLR0914"]
+"evals/**" = ["T20", "S603"]
 
 [tool.mypy]
 strict = true
@@ -83,7 +87,8 @@ filterwarnings = ["error"]
 
 [tool.coverage.run]
 branch = true
-source = ["golden"]
+# The drill harness and the decision benchmark are held to the same bar as the CLI.
+source = ["golden", "evals", "scripts"]
 omit = ["*/golden/__main__.py"]
 relative_files = true
 
@@ -98,6 +103,20 @@ exclude_also = ["if __name__ == .__main__.:", "raise NotImplementedError"]
 [tool.mutmut]
 source_paths = ["src/golden/"]
 pytest_add_cli_args = ["-p", "no:randomly", "-x", "-q"]
+# tests/test_evals.py and tests/test_drill.py load evals/, scripts/ and the example
+# projects from the sandbox.
+# Tests that check docs/alignment.md and the published numbers read these too.
+also_copy = [
+    "evals/",
+    "scripts/",
+    "examples/",
+    "docs/",
+    ".github/",
+    "actions/",
+    "templates/",
+    "README.md",
+    "uv.lock",
+]
 # "Arid" lines (Google, TSE 2021): mutating them yields no actionable test.
 do_not_mutate_patterns = [
     'help="',                          # argparse help text

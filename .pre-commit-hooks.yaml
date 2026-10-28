@@ -1,0 +1,28 @@
+# Shift left: the Golden Pipeline's checks before the code leaves your machine.
+# Consumers add this repository to .pre-commit-config.yaml with `rev:` set to the
+# SAME commit SHA their ci.yml pins for golden.yml, so local and CI verdicts
+# come from identical gate code. See docs/adoption.md.
+- id: golden-policy
+  name: golden policy check
+  description: Validate golden.toml against the platform floors.
+  entry: golden policy check
+  language: python
+  files: (^|/)golden\.toml$
+  pass_filenames: false
+
+- id: golden-fast
+  name: golden local --fast
+  description: Policy, format, lint and type checks with the pipeline's own commands.
+  entry: golden local --fast
+  language: python
+  pass_filenames: false
+  # args: [--language, python]
+
+- id: golden-full
+  name: golden local
+  description: Tests plus the diff coverage, test presence and flake gates, as CI runs them.
+  entry: golden local
+  language: python
+  pass_filenames: false
+  stages: [pre-push]
+  # args: [--language, python]

@@ -1,0 +1,41 @@
+# The long fuzzing run: every gate parser with tens of thousands of generated inputs each, nightly
+# on the default branch. Pull requests run the same tests at a fixed 40 examples
+# (tests/test_fuzz.py, inside the normal test step); a new crash found here is a red run with the
+# minimal failing input in the log. Not a required check.
+name: fuzz
+
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: fuzz
+  cancel-in-progress: false
+
+jobs:
+  parsers:
+    name: fuzz parsers
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: $/actions/setup
+        with:
+          language: python
+          version: "3.13"
+          install-command: uv sync --locked
+      - name: Fuzz every parser and the properties
+        env:
+          HYPOTHESIS_PROFILE: fuzz
+          FUZZ_EXAMPLES: "20000"
+        run: uv run pytest tests/test_fuzz.py tests/test_properties.py -n auto -p no:randomly -q

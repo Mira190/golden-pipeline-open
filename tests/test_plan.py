@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -68,7 +69,7 @@ def test_unknown_language(tmp_path):
 
 
 def test_bad_versions_matrix(tmp_path):
-    with pytest.raises(json.JSONDecodeError):
+    with pytest.raises(ValueError, match=r"^versions is not valid JSON: Expecting ',' delimiter"):
         plan.commands("go", {"versions": "[3.12"}, tmp_path)
 
 
@@ -160,7 +161,7 @@ def test_exempt_sources_are_not_mutated(repo):
     assert plan.changes("python", base, policy)["sources-changed"] == "false"
 
 
-def test_build_reports_label_and_repeats(repo):
+def test_build_reports_opt_out_and_repeats(repo):
     repo.commit({"README.md": "x"})
     base = repo.git("rev-parse", "HEAD")
     repo.commit({"README.md": "y"})
@@ -171,7 +172,9 @@ def test_build_reports_label_and_repeats(repo):
         POLICY,
         repo.root,
     )
-    assert outputs["presence-report-only"] == "true"
+    # A label alone never makes the gate report-only: `golden plan` decides who applied it.
+    assert outputs["presence-report-only"] == "false"
+    assert outputs["presence-opt-out"] == ""
     assert outputs["repeats"] == "10"
     assert outputs["base"] == base
     assert outputs["event"] == "pull_request"
@@ -181,15 +184,56 @@ def test_build_reports_label_and_repeats(repo):
 def test_build_without_label_input(repo):
     outputs = plan.build("go", {}, plan.Event("push", {}), POLICY, repo.root)
     assert outputs["presence-report-only"] == "false"
+    assert outputs["presence-opt-out"] == ""
     assert outputs["base"] == ""
 
 
-def test_write_outputs(tmp_path):
+def test_write_outputs(tmp_path, monkeypatch):
     target = tmp_path / "out"
-    plan.write_outputs({"a": "1", "b": "x y"}, target)
-    assert target.read_text() == "a=1\nb=x y\n"
-    with pytest.raises(ValueError, match="single line"):
-        plan.write_outputs({"c": "1\n2"}, target)
+    monkeypatch.setattr(plan.secrets, "token_hex", lambda n: "f" * 2 * n)
+    plan.write_outputs({"a": "1", "b": "x y", "c": "make deps\nmake test", "d": "x\ry"}, target)
+    end = "GOLDEN_" + "f" * 32
+    assert target.read_bytes().decode() == (
+        f"a=1\nb=x y\nc<<{end}\nmake deps\nmake test\n{end}\nd<<{end}\nx\ry\n{end}\n"
+    )
+
+
+def test_write_outputs_cannot_be_injected(tmp_path):
+    target = tmp_path / "out"
+    plan.write_outputs({"cmd": "pytest\nbase=0000", "base": "real"}, target)
+    lines = target.read_text().splitlines()
+    assert lines[0].startswith("cmd<<GOLDEN_")
+    assert lines[3] == lines[0].removeprefix("cmd<<")
+    assert lines[4] == "base=real"
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        plan.Event("pull_request", {}),
+        plan.Event("pull_request", {"pull_request": {"base": None}}),
+        plan.Event("merge_group", {"merge_group": {}}),
+    ],
+)
+def test_event_without_base_fails_closed(event):
+    with pytest.raises(ValueError, match="event payload has no base commit"):
+        event.base()
+
+
+def test_changes_select_only_runnable_tests(repo):
+    repo.commit({"pkg/a.py": "def f():\n    return 1\n"})
+    base = repo.git("rev-parse", "HEAD")
+    repo.commit(
+        {
+            "tests/conftest.py": "import pytest\n",
+            "tests/helpers.py": "X = 1\n",
+            "tests/test_a.py": "from pkg.a import f\n",
+            "shop/tests.py": "def test_x():\n    pass\n",
+        }
+    )
+    result = plan.changes("python", base, POLICY)
+    assert result["tests"] == "shop/tests.py tests/test_a.py"
+    assert result["test-packages"] == "./shop ./tests"
 
 
 def test_render_escapes_pipes():
@@ -203,12 +247,15 @@ def test_render_escapes_pipes():
             "test-command",
             "tests",
             "mutate",
+            "gating-changes",
         ),
         "",
     )
     outputs["format-command"] = "a || b"
+    outputs["test-command"] = "make deps\nmake test"
     text = plan.render("go", outputs)
     assert "| format-command | `a \\|\\| b` |" in text
+    assert "| test-command | `make deps ⏎ make test` |" in text
     assert "| base | _(none)_ |" in text
 
 
@@ -226,3 +273,178 @@ def test_cli_plan_writes_github_outputs(repo, monkeypatch, capsys):
     assert cli.main(["plan", "--language", "node"]) == 0
     assert "install-command=npm ci --ignore-scripts\n" in out.read_text()
     assert "### Golden plan (node)" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("language", "files", "tests"),
+    [
+        (
+            "python",
+            ["tests/conftest.py", "tests/helpers.py", "conftest.py", "tests/test_a.py"],
+            "tests/test_a.py",
+        ),
+        ("python", ["tests/conftest.py", "tests/fixtures/data.py"], ""),
+        ("node", ["test/setup.ts", "tests/fixtures/x.json", "src/a.test.ts"], "src/a.test.ts"),
+        ("node", ["src/__tests__/helpers.ts"], ""),
+    ],
+)
+def test_flake_gate_only_reruns_runnable_tests(repo, language, files, tests):
+    # Test support files count for presence but cannot be re-run on their own.
+    repo.commit({"README.md": "x"})
+    base = repo.git("rev-parse", "HEAD")
+    repo.commit(dict.fromkeys(files, "x\n"))
+    assert plan.changes(language, base, POLICY)["tests"] == tests
+
+
+def test_mutation_targets_include_functions_a_test_only_change_touches(repo):
+    mod = "def rate(q):\n    return 2 if q > 10 else 1\n\n\ndef fee():\n    return 1\n"
+    test = "from pkg.mod import rate\n\n\ndef test_rate():\n    assert rate(11) == 2\n"
+    repo.commit({"pkg/mod.py": mod, "tests/test_mod.py": test})
+    base = repo.git("rev-parse", "HEAD")
+    repo.commit({"tests/test_mod.py": test.replace("assert rate(11) == 2", "rate(11)")})
+    assert plan.mutation_targets(plan.presets.get("python"), base, ()) == [
+        "pkg.mod.x_rate__mutmut_*"
+    ]
+    assert plan.changes("python", base, POLICY)["mutate"] == "pkg.mod.x_rate__mutmut_*"
+    assert plan.changes("python", base, POLICY)["sources-changed"] == "false"
+
+
+def test_gating_changes(repo, monkeypatch):
+    repo.commit({".github/workflows/ci.yml": "a", "svc/golden.toml": "", "svc/a.py": "x"})
+    base = repo.git("rev-parse", "HEAD")
+    assert plan.gating_changes(base, Path("golden.toml")) == []
+    repo.commit(
+        {".github/workflows/ci.yml": "b", "svc/golden.toml": "[coverage]", "golden.toml": ""}
+    )
+    monkeypatch.chdir(repo.root / "svc")
+    assert plan.gating_changes(base, Path("golden.toml")) == [
+        ".github/workflows/ci.yml",
+        "svc/golden.toml",
+    ]
+    assert plan.gating_changes(base, Path("../golden.toml")) == [
+        ".github/workflows/ci.yml",
+        "golden.toml",
+    ]
+    assert plan.gating_changes("", Path("golden.toml")) == []
+
+
+def test_python_defaults_bound_every_test_in_time():
+    # A hung test must fail with a stack trace, not burn the job's 30-minute timeout.
+    for key in ("test-command", "flaky-command"):
+        command = plan.DEFAULTS["python"][key]
+        assert "--with pytest-timeout==2.5.0" in command
+        assert "--timeout=300" in command
+
+
+def test_change_size_skips_lockfiles_snapshots_and_exempt_files(repo):
+    base = repo.commit({"README.md": "x\n"})
+    repo.commit(
+        {
+            "src/a.py": "a\nb\n",
+            "uv.lock": "x\n" * 900,
+            "web/package-lock.json": "x\n" * 900,
+            "ui/__snapshots__/x.snap": "x\n" * 900,
+            "gen/model.py": "x\n" * 900,
+        }
+    )
+    assert plan.change_size(base, ("gen/**",)) == 2
+    assert plan.change_size("", ()) == 0
+
+
+def test_build_reports_change_size(repo):
+    base = repo.commit({"README.md": "x\n"})
+    repo.commit({"a.py": "1\n2\n3\n"})
+    assert plan.build("python", {}, pr_event(base), POLICY, repo.root)["change-size"] == "3"
+
+
+@pytest.mark.parametrize(
+    ("lines", "warned"), [(plan.LARGE_CHANGE, False), (plan.LARGE_CHANGE + 1, True)]
+)
+def test_cli_plan_warns_about_large_changes(repo, monkeypatch, tmp_path, capsys, lines, warned):
+    base = repo.commit({"README.md": "x\n"})
+    repo.commit({"big.py": "x = 1\n" * lines})
+    event = tmp_path / "event.json"
+    event.write_text(json.dumps({"pull_request": {"base": {"sha": base}, "labels": []}}))
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event))
+    assert cli.main(["plan", "--language", "python"]) == 0
+    out = capsys.readouterr().out
+    assert (f"::warning::Large change: {lines} changed lines" in out) is warned
+
+
+# ------------------------------------------------------------- found by tests/test_fuzz.py
+@pytest.mark.parametrize("sha", ["", None, 0, 5, False, ["abc"], {"sha": "abc"}])
+def test_a_base_that_is_not_a_commit_name_is_an_error_not_no_change(sha):
+    # An empty base reads as "no change to judge" and skips every gate; str(None) was "None".
+    with pytest.raises(ValueError, match=r"^pull_request event payload has no base commit$"):
+        pr_event(sha).base()
+    event = plan.Event("merge_group", {"merge_group": {"base_sha": sha}})
+    with pytest.raises(ValueError, match=r"^merge_group event payload has no base commit$"):
+        event.base()
+
+
+def test_a_pull_request_target_event_needs_its_base_too():
+    event = plan.Event("pull_request_target", {"pull_request": {"base": {"sha": ""}}})
+    with pytest.raises(ValueError, match=r"^pull_request_target event payload has no base commit$"):
+        event.base()
+
+
+@pytest.mark.parametrize("name", ["push", "schedule", "workflow_dispatch", ""])
+def test_an_event_without_a_change_to_judge_has_no_base_whatever_it_holds(name):
+    assert plan.Event(name, {"pull_request": {"base": {"sha": ""}}}).base() == ""
+
+
+@pytest.mark.parametrize(
+    ("content", "reason"),
+    [
+        (b"", "is not valid JSON"),
+        (b"{", "is not valid JSON"),
+        (b"\xff", "is not valid JSON"),
+        (b"[" * 100_000, "is not valid JSON"),
+        (b"[]", "is not a JSON object"),
+        (b"null", "is not a JSON object"),
+        (b'"pull_request"', "is not a JSON object"),
+    ],
+)
+def test_an_event_file_that_is_no_json_object_is_an_error_naming_it(
+    tmp_path, monkeypatch, content, reason
+):
+    path = tmp_path / "event.json"
+    path.write_bytes(content)
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(path))
+    with pytest.raises(ValueError, match=r"^the event payload .*event\.json ") as raised:
+        plan.Event.from_env()
+    assert type(raised.value) is ValueError
+    assert str(raised.value).startswith(f"the event payload {path} {reason}")
+
+
+def test_workflow_inputs_are_read_from_the_environment(monkeypatch):
+    assert plan.inputs_from_env() == {}
+    monkeypatch.setenv("GOLDEN_INPUTS", "")
+    assert plan.inputs_from_env() == {}
+    monkeypatch.setenv("GOLDEN_INPUTS", '{"test-command": "make"}')
+    assert plan.inputs_from_env() == {"test-command": "make"}
+
+
+@pytest.mark.parametrize(
+    ("text", "reason"),
+    [
+        ("{", "is not valid JSON"),
+        ("[" * 100_000, "is not valid JSON"),
+        ("null", "is not a JSON object"),
+        ("[]", "is not a JSON object"),
+        ('"x"', "is not a JSON object"),
+        ("0", "is not a JSON object"),
+    ],
+)
+def test_workflow_inputs_that_are_no_json_object_are_an_error(monkeypatch, text, reason):
+    monkeypatch.setenv("GOLDEN_INPUTS", text)
+    with pytest.raises(ValueError, match=rf"^GOLDEN_INPUTS {reason}") as raised:
+        plan.inputs_from_env()
+    assert type(raised.value) is ValueError
+
+
+def test_a_versions_matrix_nested_too_deeply_is_an_error(tmp_path):
+    with pytest.raises(ValueError, match=r"^versions is not valid JSON") as raised:
+        plan.commands("go", {"versions": "[" * 100_000}, tmp_path)
+    assert type(raised.value) is ValueError

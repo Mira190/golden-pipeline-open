@@ -9,20 +9,26 @@ from __future__ import annotations
 
 import json
 import os
+import posixpath
 import re
+import secrets
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from golden import gitdiff, presets
+from golden import gitdiff, impact, optout, presets
 from golden.config import Policy
 from golden.globmatch import match_any
 
 ZERO_SHA = "0" * 40
 
 PY_TEST_PLUGINS = (
-    "--with pytest-cov==7.1.0 --with pytest-xdist==3.8.0 --with pytest-randomly==5.0.0"
+    "--with pytest-cov==7.1.0 --with pytest-xdist==3.8.0 --with pytest-randomly==5.0.0 "
+    "--with pytest-timeout==2.5.0"
 )
+# Per-test ceiling, Google's "medium" test size: a hung test fails in minutes with
+# a stack trace instead of burning the job timeout (Vitest and `go test` have one).
+PY_TEST_TIMEOUT = "--timeout=300"
 MUTMUT = "uv run --with mutmut==3.8.0 mutmut"
 GO_TOOLS = {
     "cobertura": "github.com/boumenot/gocover-cobertura@v1.5.0",
@@ -37,11 +43,11 @@ DEFAULTS: dict[str, dict[str, str]] = {
         "format-command": "uvx ruff@0.17.0 format --check --diff .",
         "lint-command": "uvx ruff@0.17.0 check --output-format=github .",
         "typecheck-command": "uv run --with mypy==2.4.0 mypy .",
-        "test-command": f"uv run {PY_TEST_PLUGINS} pytest -n auto -p randomly "
+        "test-command": f"uv run {PY_TEST_PLUGINS} pytest -n auto -p randomly {PY_TEST_TIMEOUT} "
         "--cov --cov-report=xml:coverage.xml --cov-report=term",
         "coverage-report": "coverage.xml",
         "flaky-command": f"uv run {PY_TEST_PLUGINS} --with pytest-repeat==0.9.4 pytest -n auto "
-        '-p randomly --count="$GOLDEN_REPEATS" $GOLDEN_TESTS',
+        f'-p randomly {PY_TEST_TIMEOUT} --count="$GOLDEN_REPEATS" $GOLDEN_TESTS',
         "mutation-command": f"{MUTMUT} run $GOLDEN_MUTATE && {MUTMUT} export-cicd-stats",
         "mutation-report": "mutants/mutmut-cicd-stats.json",
         "mutation-format": "mutmut",
@@ -84,6 +90,29 @@ DEFAULTS: dict[str, dict[str, str]] = {
 MUTATE_SEPARATOR = {"python": " ", "node": ",", "go": " "}
 
 
+def _payload(path: str) -> dict[str, Any]:
+    """The GitHub event file: a JSON object, or an error that names the file."""
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (ValueError, RecursionError) as exc:  # not JSON, not UTF-8, or a deep nest
+        raise ValueError(f"the event payload {path} is not valid JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"the event payload {path} is not a JSON object")
+    return payload
+
+
+def inputs_from_env() -> dict[str, Any]:
+    """The workflow's inputs: `GOLDEN_INPUTS`, a JSON object; unset means all defaults."""
+    text = os.environ.get("GOLDEN_INPUTS") or "{}"
+    try:
+        inputs = json.loads(text)
+    except (ValueError, RecursionError) as exc:  # not JSON, or a deep nest
+        raise ValueError(f"GOLDEN_INPUTS is not valid JSON: {exc}") from exc
+    if not isinstance(inputs, dict):
+        raise ValueError("GOLDEN_INPUTS is not a JSON object")
+    return inputs
+
+
 @dataclass(frozen=True)
 class Event:
     name: str
@@ -92,19 +121,28 @@ class Event:
     @classmethod
     def from_env(cls) -> Event:
         path = os.environ.get("GITHUB_EVENT_PATH")
-        payload = json.loads(Path(path).read_text(encoding="utf-8")) if path else {}
+        payload = _payload(path) if path else {}
         return cls(os.environ.get("GITHUB_EVENT_NAME", ""), payload)
 
     def base(self) -> str:
         """The commit a change is judged against; empty when there is no change to judge."""
-        if self.name in {"pull_request", "pull_request_target"}:
-            return str(self.payload["pull_request"]["base"]["sha"])
-        if self.name == "merge_group":
-            return str(self.payload["merge_group"]["base_sha"])
-        return ""
+        try:
+            if self.name in {"pull_request", "pull_request_target"}:
+                sha = self.payload["pull_request"]["base"]["sha"]
+            elif self.name == "merge_group":
+                sha = self.payload["merge_group"]["base_sha"]
+            else:
+                return ""
+        except (KeyError, TypeError) as exc:
+            raise ValueError(f"{self.name} event payload has no base commit") from exc
+        # An empty base would read as "no change to judge" and skip every gate.
+        if not isinstance(sha, str) or not sha:
+            raise ValueError(f"{self.name} event payload has no base commit")
+        return sha
 
-    def labels(self) -> set[str]:
-        return {lbl["name"] for lbl in self.payload.get("pull_request", {}).get("labels", [])}
+    def opt_out(self, label: str, repository: str, fetch: optout.Fetch) -> optout.Decision:
+        """Whether the test-presence opt-out label counts (a second person applied it)."""
+        return optout.decide(self.payload, self.name, label, repository, fetch)
 
 
 def _node_install(root: Path) -> str:
@@ -138,13 +176,29 @@ def commands(language: str, inputs: dict[str, Any], root: Path) -> dict[str, str
         value = inputs.get(key)
         if isinstance(value, str) and value.strip():
             effective[key] = value.strip()
-    versions = json.loads(effective["versions"])
+    try:
+        versions = json.loads(effective["versions"])
+    except (ValueError, RecursionError) as exc:  # not JSON, or a deep nest
+        raise ValueError(f"versions is not valid JSON: {exc}") from exc
     if not isinstance(versions, list) or not versions:
         raise ValueError("versions must be a non-empty JSON list")
     effective["primary-version"] = str(versions[-1])
     effective["coverage-dir"] = str(PurePosixPath(effective["coverage-report"]).parent)
     effective["package-manager"] = _node_package_manager(root) if language == "node" else ""
     return effective
+
+
+def mutation_targets(preset: presets.Preset, base: str, exempt: tuple[str, ...]) -> list[str]:
+    """Mutation-tool selectors for the changed source lines and the test-touched functions."""
+    lines = impact.mutation_lines(base, preset, exempt)
+    return sorted(
+        {
+            target
+            for path, ranges in lines.items()
+            if preset.is_source(path) and not match_any(path, exempt)
+            for target in preset.mutation_targets(path, ranges, gitdiff.read_head(path))
+        }
+    )
 
 
 def changes(language: str, base: str, policy: Policy) -> dict[str, str]:
@@ -154,16 +208,10 @@ def changes(language: str, base: str, policy: Policy) -> dict[str, str]:
     preset = presets.get(language)
     changed = gitdiff.changed_files(base)
     sources = [p for p in changed if preset.is_source(p) and not match_any(p, policy.exempt)]
-    tests = [p for p in changed if preset.is_test(p)]
-    lines = gitdiff.changed_lines(base)
-    targets = sorted(
-        {
-            t
-            for p in sources
-            if p in lines
-            for t in preset.mutation_targets(p, lines[p], gitdiff.read_head(p))
-        }
-    )
+    # Only files a test runner can execute: pytest on a conftest.py or vitest on a
+    # fixture finds no tests and fails, which would block a legitimate change.
+    tests = [p for p in changed if preset.is_runnable_test(p)]
+    targets = mutation_targets(preset, base, policy.exempt)
     packages = sorted({f"./{PurePosixPath(t).parent}" for t in tests})
     return {
         "tests": " ".join(tests),
@@ -179,11 +227,55 @@ def slug(working_directory: str) -> str:
     return cleaned or "root"
 
 
+# Files that decide how a change is gated, relative to the repository root.
+GATING_FILES = (".github/workflows", ".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS")
+GATING_WARNING = (
+    "This pull request changes how it is itself gated. GitHub runs the pull request's own copy "
+    "of a workflow, so a code owner must review this file; golden.toml loosening applies only "
+    "after merge."
+)
+
+
+def gating_changes(base: str, policy_path: Path) -> list[str]:
+    """Workflows, CODEOWNERS and the policy file this change modifies (repository paths)."""
+    if not base:
+        return []
+    policy = posixpath.normpath(
+        posixpath.join(gitdiff.repo_prefix(), Path(os.path.relpath(policy_path)).as_posix())
+    )
+    return gitdiff.changed_anywhere(base, [*GATING_FILES, policy])
+
+
+# Review effectiveness falls off past a few hundred lines (Google's small-CL
+# guidance; the SmartBear/Cisco review study). A signal for authors, not a gate.
+LARGE_CHANGE = 400
+NOT_REVIEWED_LINE_BY_LINE = ("*.lock", "package-lock.json", "go.sum", "**/__snapshots__/**")
+
+
+def change_size(base: str, exempt: tuple[str, ...]) -> int:
+    """Lines a reviewer must read: lockfiles, snapshots and exempt (generated) files excluded."""
+    if not base:
+        return 0
+    skip = (*NOT_REVIEWED_LINE_BY_LINE, *exempt)
+    return sum(n for path, n in gitdiff.numstat(base).items() if not match_any(path, skip))
+
+
+def large_change_warning(size: int) -> str:
+    return (
+        f"Large change: {size} changed lines to review (excluding lockfiles and exempt files). "
+        f"Reviews of more than {LARGE_CHANGE} lines catch proportionally fewer defects; "
+        "consider splitting it into smaller pull requests."
+    )
+
+
 def build(
-    language: str, inputs: dict[str, Any], event: Event, policy: Policy, root: Path
+    language: str,
+    inputs: dict[str, Any],
+    event: Event,
+    policy: Policy,
+    root: Path,
 ) -> dict[str, str]:
     base = event.base()
-    label = str(inputs.get("skip-presence-label") or "")
     return {
         "slug": slug(str(inputs.get("working-directory") or ".")),
         **commands(language, inputs, root),
@@ -191,16 +283,23 @@ def build(
         "base": base,
         "event": event.name,
         "repeats": f"{policy.get('flaky.repeats'):g}",
-        "presence-report-only": "true" if label and label in event.labels() else "false",
+        "change-size": str(change_size(base, policy.exempt)),
+        # Set by `golden plan` from optout.decide, which needs the API.
+        "presence-report-only": "false",
+        "presence-opt-out": "",
     }
 
 
 def write_outputs(outputs: dict[str, str], target: Path) -> None:
+    """Append job outputs; multi-line values use a delimiter they cannot contain."""
     with target.open("a", encoding="utf-8") as fh:
         for key, value in outputs.items():
-            if "\n" in value:
-                raise ValueError(f"output {key} must be a single line")
-            fh.write(f"{key}={value}\n")
+            if "\n" not in value and "\r" not in value:
+                fh.write(f"{key}={value}\n")
+                continue
+            # 128 random bits: a value cannot predict, and so cannot close, the block.
+            delimiter = f"GOLDEN_{secrets.token_hex(16)}"
+            fh.write(f"{key}<<{delimiter}\n{value}\n{delimiter}\n")
 
 
 def render(language: str, outputs: dict[str, str]) -> str:
@@ -213,9 +312,14 @@ def render(language: str, outputs: dict[str, str]) -> str:
         "test-command",
         "tests",
         "mutate",
+        "gating-changes",
+        "presence-opt-out",
+        "change-size",
     )
     rows = [
-        f"| {k} | `{outputs[k].replace('|', '\\|')}` |" if outputs[k] else f"| {k} | _(none)_ |"
+        f"| {k} | `{outputs[k].replace('|', '\\|').replace(chr(10), ' ⏎ ')}` |"
+        if outputs.get(k)
+        else f"| {k} | _(none)_ |"
         for k in keys
     ]
     return "\n".join([f"### Golden plan ({language})", "", "| | |", "|---|---|", *rows])

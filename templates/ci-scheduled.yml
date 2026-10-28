@@ -1,0 +1,28 @@
+# Nightly flaky-test scan of the default branch (the post-submit loop). Copy to
+# .github/workflows/flaky-scan.yml, replace <sha> with a full commit SHA of
+# Mira190/golden-pipeline-open and set the language. Do not make it a required check: it runs
+# on a schedule, not on pull requests. A red run is the signal.
+#
+# Scheduled workflows run on the default branch. GitHub disables them in a public repository
+# after 60 days without repository activity; `workflow_dispatch` starts a scan on demand.
+name: flaky-scan
+
+on:
+  schedule:
+    - cron: "23 3 * * *" # nightly, off the hour to avoid the load spike at :00
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: flaky-scan
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    uses: Mira190/golden-pipeline-open/.github/workflows/scheduled.yml@<sha> # v1.0.0
+    permissions:
+      contents: read
+    with:
+      language: python
+      runs: 5

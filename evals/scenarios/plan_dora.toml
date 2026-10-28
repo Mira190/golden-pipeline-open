@@ -1,0 +1,138 @@
+# Plan outputs (the contract between `golden plan` and golden.yml) and DORA input handling.
+
+[[scenario]]
+id = "plan/single-line-defaults"
+gate = "plan"
+category = "legit"
+why = "Baseline: defaults reach the job outputs."
+argv = ["plan", "--language", "go"]
+inputs = {}
+expect = "pass"
+expect_outputs = { "install-command" = "go mod download", "base" = "{base}" }
+
+[[scenario]]
+id = "plan/multi-line-command"
+gate = "plan"
+category = "legit"
+why = "A YAML `|` block is the natural way to write a two-step test command."
+argv = ["plan", "--language", "python"]
+inputs = { "test-command" = "make deps\nmake test" }
+expect = "pass"
+expect_outputs = { "test-command" = "make deps\nmake test" }
+
+[[scenario]]
+id = "plan/output-injection"
+gate = "plan"
+category = "gaming"
+why = "A crafted input must not smuggle extra outputs (e.g. overriding `base`) into $GITHUB_OUTPUT."
+argv = ["plan", "--language", "python"]
+inputs = { "test-command" = "pytest\nbase=0000000000000000000000000000000000000000" }
+expect = "pass"
+expect_outputs = { "base" = "{base}" }
+
+[[scenario]]
+id = "dora/basic"
+gate = "dora"
+category = "legit"
+why = "Baseline: four deployments, one failure."
+argv = ["dora", "{tmp}/deploys.jsonl"]
+expect = "pass"
+expect_json = { "deploys_per_day" = 1.0, "change_failure_rate" = 0.25 }
+[scenario.artifacts]
+"../deploys.jsonl" = '''{"sha": "a", "committed_at": "2026-10-01T08:00:00+00:00", "deployed_at": "2026-10-01T10:00:00+00:00", "failed": false, "restored_at": null}
+{"sha": "b", "committed_at": "2026-10-02T08:00:00+00:00", "deployed_at": "2026-10-02T12:00:00+00:00", "failed": true, "restored_at": "2026-10-02T13:00:00+00:00"}
+{"sha": "c", "committed_at": "2026-10-03T09:00:00+00:00", "deployed_at": "2026-10-03T10:00:00+00:00", "failed": false, "restored_at": null}
+{"sha": "d", "committed_at": "2026-10-05T09:00:00+00:00", "deployed_at": "2026-10-05T10:00:00+00:00", "failed": false, "restored_at": null}
+'''
+
+[[scenario]]
+id = "dora/rework-rate"
+gate = "dora"
+category = "legit"
+why = "DORA's fifth metric (2024): share of deployments that were unplanned fixes for a production incident."
+argv = ["dora", "{tmp}/deploys.jsonl"]
+expect = "pass"
+expect_json = { "deployment_rework_rate" = 0.25 }
+[scenario.artifacts]
+"../deploys.jsonl" = '''{"sha": "a", "committed_at": "2026-10-01T08:00:00+00:00", "deployed_at": "2026-10-01T10:00:00+00:00", "failed": false, "restored_at": null, "rework": false}
+{"sha": "b", "committed_at": "2026-10-02T08:00:00+00:00", "deployed_at": "2026-10-02T12:00:00+00:00", "failed": true, "restored_at": "2026-10-02T13:00:00+00:00", "rework": false}
+{"sha": "c", "committed_at": "2026-10-02T12:30:00+00:00", "deployed_at": "2026-10-02T13:00:00+00:00", "failed": false, "restored_at": null, "rework": true}
+{"sha": "d", "committed_at": "2026-10-05T09:00:00+00:00", "deployed_at": "2026-10-05T10:00:00+00:00", "failed": false, "restored_at": null, "rework": false}
+'''
+
+[[scenario]]
+id = "dora/missing-field"
+gate = "dora"
+category = "robustness"
+why = "A record without `failed` must be reported with its line number, not crash."
+argv = ["dora", "{tmp}/deploys.jsonl"]
+expect = "error"
+stdout_contains = ["line 2"]
+[scenario.artifacts]
+"../deploys.jsonl" = '''{"sha": "a", "committed_at": "2026-10-01T08:00:00+00:00", "deployed_at": "2026-10-01T10:00:00+00:00", "failed": false, "restored_at": null}
+{"sha": "b", "committed_at": "2026-10-02T08:00:00+00:00", "deployed_at": "2026-10-02T12:00:00+00:00"}
+'''
+
+[[scenario]]
+id = "dora/naive-timestamp"
+gate = "dora"
+category = "robustness"
+why = "Mixing timestamps with and without a UTC offset cannot be compared."
+argv = ["dora", "{tmp}/deploys.jsonl"]
+expect = "error"
+[scenario.artifacts]
+"../deploys.jsonl" = '''{"sha": "a", "committed_at": "2026-10-01T08:00:00", "deployed_at": "2026-10-01T10:00:00+00:00", "failed": false, "restored_at": null}
+'''
+
+[[scenario]]
+id = "plan/flags-a-change-to-its-own-workflow"
+gate = "plan"
+category = "gaming"
+why = "The PR edits the caller workflow that gates it (GitHub runs the PR's copy). The plan must say so on the file, for every reviewer to see."
+argv = ["plan", "--language", "python"]
+inputs = {}
+expect = "pass"
+stdout_contains = ["::warning file=.github/workflows/ci.yml::This pull request changes how it is itself gated."]
+[scenario.base]
+".github/workflows/ci.yml" = "on: pull_request\njobs: {}\n"
+"app.py" = "X = 1\n"
+[scenario.head]
+".github/workflows/ci.yml" = "on: pull_request\njobs:\n  ci:\n    with:\n      mutation: false\n"
+
+[[scenario]]
+id = "plan/opt-out-label-by-reviewer"
+gate = "plan"
+category = "legit"
+why = "A reviewer applies the opt-out label to a pure refactor: test presence becomes report-only."
+argv = ["plan", "--language", "python"]
+inputs = { "skip-presence-label" = "no-tests-needed" }
+labels = ["no-tests-needed"]
+event = { "pull_request" = { "number" = 7, "user" = { "login" = "author" } }, "label" = { "name" = "no-tests-needed" }, "sender" = { "login" = "reviewer" } }
+expect = "pass"
+expect_outputs = { "presence-report-only" = "true" }
+
+[[scenario]]
+id = "plan/opt-out-label-by-author"
+gate = "plan"
+category = "gaming"
+why = "The PR author labels their own PR to skip test presence: a self-service bypass."
+argv = ["plan", "--language", "python"]
+inputs = { "skip-presence-label" = "no-tests-needed" }
+labels = ["no-tests-needed"]
+event = { "pull_request" = { "number" = 7, "user" = { "login" = "author" } }, "label" = { "name" = "no-tests-needed" }, "sender" = { "login" = "author" } }
+expect = "pass"
+expect_outputs = { "presence-report-only" = "false" }
+stdout_contains = ["the PR author (@author) applied it"]
+
+[[scenario]]
+id = "plan/opt-out-label-unverifiable"
+gate = "plan"
+category = "gaming"
+why = "On a later push nobody can say who applied the label (no API here): it must not count."
+argv = ["plan", "--language", "python"]
+inputs = { "skip-presence-label" = "no-tests-needed" }
+labels = ["no-tests-needed"]
+event = { "pull_request" = { "number" = 7, "user" = { "login" = "author" } } }
+expect = "pass"
+expect_outputs = { "presence-report-only" = "false" }
+stdout_contains = ["could not verify who applied it"]

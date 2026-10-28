@@ -1,7 +1,11 @@
 # Every change needs an owner's review. Gate thresholds (golden.toml) and the
-# workflows are owned so nobody can weaken a gate in the PR it would block.
+# workflows are owned so nobody can weaken a gate in the PR it would block;
+# vulnerability exceptions (osv-scanner.toml) likewise.
 *                   @Mira190
 /golden.toml        @Mira190
+**/golden.toml      @Mira190
+**/osv-scanner.toml @Mira190
 /.github/           @Mira190
 /actions/           @Mira190
 /src/golden/        @Mira190
+**/osv-scanner.toml @Mira190

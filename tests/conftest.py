@@ -30,8 +30,32 @@ class GitRepo:
         return self.git("rev-parse", "HEAD")
 
 
+@pytest.fixture(autouse=True)
+def hermetic_env(monkeypatch):
+    """Tests must not see the CI run they execute in (its event, outputs, summary)."""
+    for name in (
+        "GITHUB_EVENT_NAME",
+        "GITHUB_EVENT_PATH",
+        "GITHUB_OUTPUT",
+        "GITHUB_STEP_SUMMARY",
+        "GITHUB_TOKEN",
+        "GITHUB_REPOSITORY",
+        "GOLDEN_INPUTS",
+        "GOLDEN_DEFAULT_BRANCH",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
 @pytest.fixture
 def repo(tmp_path, monkeypatch) -> GitRepo:
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
     return GitRepo(tmp_path)
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_github_event(monkeypatch):
+    """Tests must not pick up the event of the CI run executing them (its base commit
+    does not exist in a test repository)."""
+    monkeypatch.delenv("GITHUB_EVENT_NAME", raising=False)
+    monkeypatch.delenv("GITHUB_EVENT_PATH", raising=False)

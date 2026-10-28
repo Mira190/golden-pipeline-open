@@ -11,6 +11,61 @@ Evaluate at three levels. Each answers a different question, and each alone is m
 Capability without effectiveness is compliance theatre. Outcomes without the other two can't tell
 you *why* something got better or worse.
 
+## 0. Evaluating the evaluator: how this repository is tested
+
+The pipeline is only as trustworthy as the gate code behind it, so that code is evaluated in
+layers. Each layer catches a class of defect the others miss:
+
+| Layer | Question | Tooling | Runs |
+|---|---|---|---|
+| Static | Is the code well-formed, typed, and are the workflows safe? | ruff, mypy `--strict`, actionlint + shellcheck, zizmor, CodeQL, OpenSSF Scorecard | every PR |
+| Unit and property tests | Does each function do what it says, for every input and not just the examples? | pytest (random order, xdist), branch coverage ≥ 99%; Hypothesis properties in `tests/test_properties.py` for the invariants safety rests on (merged policy never looser than the base, no output or annotation injection, changed lines match git), 2,000 examples each with `HYPOTHESIS_PROFILE=ci` | every PR |
+| Fuzzing | Does every parser fail closed on any input, not just the malformed ones someone thought of? | Hypothesis in `tests/test_fuzz.py`, two layers per parser: structure-aware damage (fields deleted, nulled, retyped, nested 70,000 deep, truncated, re-encoded) and raw bytes. It asserts that the result is well formed or the documented error is raised, that nothing hangs, and that damage never improves a verdict | every PR at 40 examples per test; nightly (`fuzz.yml`) at 20,000 |
+| Test adequacy | Would those tests notice a bug in the gate code? | mutmut on changed functions, ≥ 80% | every PR |
+| **Decision benchmark** | Does each gate make the right merge decision on legitimate, gaming and malformed pull requests? | [`evals/`](../evals/README.md): 96 labelled pull requests run through the real CLI, scored as escapes, false blocks, robustness failures and crashes | every PR (`tests/test_evals.py`) |
+| End-to-end drills | Do the gates catch a weak test with the real toolchains, and did a tool upgrade change its contract? | `scripts/drill.py` (pytest/mutmut, Vitest/Stryker, go test/gremlins) | every PR |
+| Shadow runs (recommended) | How often would the gates block real, reviewed changes? | `golden local` or the workflow in report-only mode over a few hundred merged PRs of an adopting repository; the false-block rate in §2.1 | before raising `min_level` or tightening floors |
+| Real-fault replay | Do the gates catch real bugs, not just synthetic mutants? | [`evals/realfaults/`](../evals/realfaults/README.md): real bug fixes from open-source Python libraries, run at the fix's parent with the tests of that day. Grow it with BugsInPy or Defects4J-style pairs and report confidence intervals | on demand; quarterly as it grows |
+| Outcomes | Is delivery faster *and* more stable? | `golden dora`, Actions API | monthly |
+
+**Fuzzing the gate parsers.**
+
+- **What is fuzzed:** every parser that reads an input a pull request or a tool can shape.
+  - Coverage reports and the ratchet baseline.
+  - Mutation reports (mutmut, Stryker, gremlins) and mutmut's per-mutant results.
+  - SARIF, JUnit and `go test -json`.
+  - `golden.toml` and `osv-scanner.toml`.
+  - The deployment log.
+  - The GitHub event and the workflow inputs.
+- **The contract the tests check:**
+  - The result is well formed, or the error is exactly the documented `ValueError` or
+    `PolicyError`, with a readable message.
+  - Nothing hangs.
+  - Damage never improves a verdict: a damaged count never raises a score, a damaged SARIF
+    result never loses a finding, a damaged event never grants the test-presence opt-out, and a
+    garbage baseline never passes the ratchet.
+- **What the first long run found:** 2.45 million examples turned up about 40 crashes and
+  fail-open readings across nine parsers. Among them:
+  - An empty mutation report passed as "no mutants".
+  - A `-Infinity` coverage baseline let every change through the ratchet.
+  - A login sent as a list counted as a second person for the opt-out label.
+  - A null SARIF level downgraded an error.
+  - A regex took 20 s on one long line.
+- **Regressions:** each finding has a minimal regression test next to the parser's own tests.
+- **How to run it:** `HYPOTHESIS_PROFILE=fuzz uv run pytest tests/test_fuzz.py -n auto` runs
+  the long profile locally.
+
+The decision benchmark and the drills complement each other. The benchmark is fast (about 20 s),
+needs only git and Python, and covers breadth: 10 gates, adversarial inputs, policy edge cases.
+The drills are slow and need every toolchain, but they are the only check that catches drift in
+an external tool's contract. Examples are mutmut renaming its mutants, or a Vitest major version
+that Stryker can no longer drive. When the two disagree, trust the drill for "does it work with
+real tools" and the benchmark for "is the decision right".
+
+Run against v1.0.0, the benchmark finds 31 escapes, 20 false blocks and 13 robustness failures
+(7 of them tracebacks). Every one now has a fix and a unit test, and the
+benchmark is part of the test suite. See [evals/README.md](../evals/README.md#results).
+
 ## 1. Capability: the maturity scorecard
 
 `golden scorecard` runs inside the `gates` job of every pipeline run (see
@@ -40,9 +95,9 @@ Dependency-Update-Tool and Security-Policy; 8 or higher on Branch-Protection and
 |---|---|---|---|
 | Diff coverage | % of changed coverable lines executed by tests | ≥ 90% (floor 80) | Google's "exemplary" level; per-change, so it doesn't punish legacy code |
 | Mutation score (changed code) | (killed + timeout) / valid mutants | ≥ 80% (floor 60) | coverage is weakly correlated with fault detection; mutants are coupled to 70–73% of real faults |
-| Flake rate | runs with inconsistent results on the same commit / all runs | < 0.5% | Google measured 1.5%; tests lose value approaching 1% |
+| Flake rate | runs with inconsistent results on the same commit / all runs. `golden flaky-scan` (`scheduled.yml`) measures it nightly as flaky tests / tests seen over N runs of one commit (`flaky_percent` in `flaky-scan.json`), which is stricter than the per-run rate | < 0.5% | Google reported 1.5% in 2016 and about 0.15% by 2020 (*SWE at Google* ch. 11); tests lose value approaching 1% |
 | Escaped-defect rate | production defects a gate should have caught / all production defects | falling quarter over quarter | the ground truth for every other metric |
-| Gate false-positive rate | gate failures judged wrong by the author and confirmed by a reviewer / all gate failures | < 5% | above that, people learn to route around the gate |
+| Gate false-positive rate | gate failures judged wrong by the author and confirmed by a reviewer / all gate failures | < 5% | above that, people learn to route around the gate. Every confirmed case becomes a `legit` scenario in [`evals/`](../evals/README.md) |
 | Waiver count and age | active waivers, days to expiry | trending to 0 | waivers are debt with a due date |
 
 ### 2.2 Escaped-defect review
@@ -50,7 +105,8 @@ Dependency-Update-Tool and Security-Policy; 8 or higher on Branch-Protection and
 For every production incident or customer-found bug, answer in the post-incident review: *which
 gate should have caught this, and why didn't it?* Then do one of the following:
 
-- add the missing test, and with it a new drill scenario that reproduces the escape
+- add the missing test, and with it a new drill or [`evals/`](../evals/README.md) scenario
+  (category `gaming`) that reproduces the escape
 - tighten a threshold in `golden.toml`
 - propose a new control
 
@@ -116,23 +172,26 @@ reason are listed and justified in `pyproject.toml`.
 Record one JSON line per production deployment, for example from your deploy job:
 
 ```json
-{"sha": "…", "committed_at": "2026-10-01T08:00:00+00:00", "deployed_at": "2026-10-01T10:00:00+00:00", "failed": false, "restored_at": null}
+{"sha": "…", "committed_at": "2026-10-01T08:00:00+00:00", "deployed_at": "2026-10-01T10:00:00+00:00", "failed": false, "restored_at": null, "rework": false}
 ```
 
 Then run:
 
 ```console
 $ golden dora deployments.jsonl
-{"deploys_per_day": 1.0, "lead_time_hours_p50": 1.5, "change_failure_rate": 0.25, "time_to_restore_hours_p50": 1.0}
+{"deploys_per_day": 1.0, "lead_time_hours_p50": 1.5, "change_failure_rate": 0.25, "time_to_restore_hours_p50": 1.0, "deployment_rework_rate": 0.25}
 ```
 
-| DORA metric (2024+) | Elite reference (DORA 2024) |
-|---|---|
-| Deployment frequency | on demand |
-| Change lead time | < 1 day |
-| Change fail rate | ~5% |
-| Failed deployment recovery time | < 1 hour |
-| Deployment rework rate | track the trend (new in 2024) |
+| DORA metric (2024+) | `golden dora` key | Elite reference (DORA 2024) |
+|---|---|---|
+| Deployment frequency | `deploys_per_day` | on demand |
+| Change lead time | `lead_time_hours_p50` | < 1 day |
+| Change fail rate | `change_failure_rate` | ~5% |
+| Failed deployment recovery time | `time_to_restore_hours_p50` | < 1 hour |
+| Deployment rework rate | `deployment_rework_rate`: share of deployments with `"rework": true` (an unplanned deployment to fix a production incident); `null` when the log has no `rework` field | track the trend (new in 2024) |
+
+Timestamps must carry a UTC offset. A malformed record fails with its line number rather than
+skewing the numbers.
 
 Pipeline health (Actions API: `GET /repos/{repo}/actions/runs`, `…/jobs`):
 

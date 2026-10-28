@@ -10,11 +10,16 @@ def _escape(value: str) -> str:
     return value.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
 
 
+def _escape_property(value: str) -> str:
+    # Property values also end at ',' and '::' (actions/toolkit escapeProperty).
+    return _escape(value).replace(":", "%3A").replace(",", "%2C")
+
+
 def annotate(level: str, message: str, *, file: str | None = None, line: int | None = None) -> None:
     """Emit a GitHub workflow command (`::error file=...::msg`)."""
     props = []
     if file:
-        props.append(f"file={file}")
+        props.append(f"file={_escape_property(file)}")
     if line:
         props.append(f"line={line}")
     prefix = f"::{level} {','.join(props)}::" if props else f"::{level}::"

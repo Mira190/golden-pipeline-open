@@ -1,0 +1,157 @@
+# Diff coverage and the coverage ratchet.
+#
+# Coverage reports are CI artifacts: they exist in the workspace but are not
+# committed, so they live under [scenario.artifacts].
+
+[[scenario]]
+id = "diff-coverage/covered"
+gate = "diff-coverage"
+category = "legit"
+why = "Baseline: every changed line executed."
+argv = ["diff-coverage", "--base", "{base}", "coverage.xml"]
+expect = "pass"
+[scenario.base]
+"README.md" = "x\n"
+[scenario.head]
+"billing/tax.py" = "def rate(q):\n    if q > 10:\n        return 2\n    return 1\n"
+[scenario.artifacts]
+"coverage.xml" = '''<?xml version="1.0" ?>
+<coverage line-rate="1" lines-covered="4" lines-valid="4" version="7">
+<sources><source>{root}</source></sources>
+<packages><package name="billing"><classes><class filename="billing/tax.py" name="tax.py">
+<lines><line number="1" hits="1"/><line number="2" hits="1"/><line number="3" hits="1"/><line number="4" hits="1"/></lines>
+</class></classes></package></packages></coverage>
+'''
+
+[[scenario]]
+id = "diff-coverage/uncovered"
+gate = "diff-coverage"
+category = "gaming"
+why = "Baseline: half of the new lines never run."
+argv = ["diff-coverage", "--base", "{base}", "coverage.xml"]
+expect = "block"
+[scenario.base]
+"README.md" = "x\n"
+[scenario.head]
+"billing/tax.py" = "def rate(q):\n    if q > 10:\n        return 2\n    return 1\n"
+[scenario.artifacts]
+"coverage.xml" = '''<?xml version="1.0" ?>
+<coverage line-rate="0.5" lines-covered="2" lines-valid="4" version="7">
+<sources><source>{root}</source></sources>
+<packages><package name="billing"><classes><class filename="billing/tax.py" name="tax.py">
+<lines><line number="1" hits="1"/><line number="2" hits="1"/><line number="3" hits="0"/><line number="4" hits="0"/></lines>
+</class></classes></package></packages></coverage>
+'''
+
+[[scenario]]
+id = "diff-coverage/docs-only"
+gate = "diff-coverage"
+category = "legit"
+why = "Baseline: no coverable lines changed."
+argv = ["diff-coverage", "--base", "{base}", "coverage.xml"]
+expect = "pass"
+[scenario.base]
+"README.md" = "x\n"
+[scenario.head]
+"README.md" = "y\n"
+[scenario.artifacts]
+"coverage.xml" = '''<?xml version="1.0" ?>
+<coverage line-rate="1" lines-covered="0" lines-valid="0" version="7">
+<sources><source>{root}</source></sources><packages/></coverage>
+'''
+
+[[scenario]]
+id = "diff-coverage/waiver-added-in-pr"
+gate = "diff-coverage"
+category = "gaming"
+why = "The PR waives diff coverage for itself."
+argv = ["diff-coverage", "--base", "{base}", "coverage.xml"]
+expect = "block"
+[scenario.base]
+"README.md" = "x\n"
+[scenario.head]
+"billing/tax.py" = "def rate(q):\n    if q > 10:\n        return 2\n    return 1\n"
+"golden.toml" = "[waivers.diff-coverage]\nreason = \"hotfix\"\nexpires = {in30days}\n"
+[scenario.artifacts]
+"coverage.xml" = '''<?xml version="1.0" ?>
+<coverage line-rate="0.5" lines-covered="2" lines-valid="4" version="7">
+<sources><source>{root}</source></sources>
+<packages><package name="billing"><classes><class filename="billing/tax.py" name="tax.py">
+<lines><line number="1" hits="1"/><line number="2" hits="1"/><line number="3" hits="0"/><line number="4" hits="0"/></lines>
+</class></classes></package></packages></coverage>
+'''
+
+[[scenario]]
+id = "diff-coverage/threshold-lowered-in-pr"
+gate = "diff-coverage"
+category = "gaming"
+why = "Merged policy demands 95%; the PR lowers it to 80% to squeeze 80% coverage through."
+argv = ["diff-coverage", "--base", "{base}", "coverage.xml"]
+expect = "block"
+[scenario.base]
+"golden.toml" = "[coverage]\ndiff_min = 95\n"
+[scenario.head]
+"golden.toml" = "[coverage]\ndiff_min = 80\n"
+"billing/tax.py" = "def rate(q):\n    if q > 10:\n        return 2\n    if q > 5:\n        return 3\n    return 1\n"
+[scenario.artifacts]
+"coverage.xml" = '''<?xml version="1.0" ?>
+<coverage line-rate="0.833" lines-covered="5" lines-valid="6" version="7">
+<sources><source>{root}</source></sources>
+<packages><package name="billing"><classes><class filename="billing/tax.py" name="tax.py">
+<lines><line number="1" hits="1"/><line number="2" hits="1"/><line number="3" hits="1"/><line number="4" hits="1"/><line number="5" hits="0"/><line number="6" hits="1"/></lines>
+</class></classes></package></packages></coverage>
+'''
+
+[[scenario]]
+id = "ratchet/drop-blocks"
+gate = "ratchet"
+category = "gaming"
+why = "Baseline: total coverage fell 5 pp below the default branch."
+argv = ["ratchet", "coverage.xml", "--baseline", "{tmp}/baseline.json"]
+expect = "block"
+[scenario.artifacts]
+"../baseline.json" = '{"line_percent": 80.0, "sha": "x"}'
+"coverage.xml" = '''<?xml version="1.0" ?>
+<coverage lines-covered="75" lines-valid="100" version="7"><packages/></coverage>
+'''
+
+[[scenario]]
+id = "ratchet/tolerance-loosened-in-pr"
+gate = "ratchet"
+category = "gaming"
+why = "Merged tolerance is 0.2 pp; the PR raises it to the 2 pp floor and drops 1.5 pp."
+argv = ["ratchet", "coverage.xml", "--baseline", "{tmp}/baseline.json"]
+expect = "block"
+[scenario.base]
+"golden.toml" = "[coverage]\nratchet_tolerance = 0.2\n"
+[scenario.head]
+"golden.toml" = "[coverage]\nratchet_tolerance = 2\n"
+[scenario.artifacts]
+"../baseline.json" = '{"line_percent": 80.0, "sha": "x"}'
+"coverage.xml" = '''<?xml version="1.0" ?>
+<coverage lines-covered="785" lines-valid="1000" version="7"><packages/></coverage>
+'''
+
+[[scenario]]
+id = "ratchet/corrupt-baseline"
+gate = "ratchet"
+category = "robustness"
+why = "A baseline from an older format (no line_percent) must fail closed with a message, not a traceback."
+argv = ["ratchet", "coverage.xml", "--baseline", "{tmp}/baseline.json"]
+expect = "error"
+[scenario.artifacts]
+"../baseline.json" = '{"percent": 80.0}'
+"coverage.xml" = '''<?xml version="1.0" ?>
+<coverage lines-covered="75" lines-valid="100" version="7"><packages/></coverage>
+'''
+
+[[scenario]]
+id = "ratchet/corrupt-report"
+gate = "ratchet"
+category = "robustness"
+why = "A truncated Cobertura file (test job killed mid-write) must fail closed with a message."
+argv = ["ratchet", "coverage.xml", "--baseline", "{tmp}/baseline.json"]
+expect = "error"
+[scenario.artifacts]
+"../baseline.json" = '{"line_percent": 80.0, "sha": "x"}'
+"coverage.xml" = '<?xml version="1.0" ?><coverage lines-covered="75" lines-'

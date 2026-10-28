@@ -1,0 +1,165 @@
+name: Golden verify image
+description: >-
+  Deploy-time gate: refuse an image unless its SLSA build provenance (and,
+  optionally, its SBOM attestation) is signed by the expected reusable workflow
+  and was built from the expected repository.
+inputs:
+  image:
+    description: Image name with registry, no tag and no digest, for example ghcr.io/acme/api.
+    required: true
+  digest:
+    description: Image digest, sha256:<64 hex>. Tags are refused because they can be moved.
+    required: true
+  repository:
+    description: >-
+      Repository whose workflow called the reusable workflow, as owner/name (the
+      certificate's source repository). Attestations are looked up there.
+    default: ${{ github.repository }}
+  signer-workflow:
+    description: >-
+      The reusable workflow that must have signed the attestations, as
+      owner/repo/path/to/workflow.yml, without a ref.
+    default: Mira190/golden-pipeline-open/.github/workflows/container.yml
+  predicate-type:
+    description: Predicate type of the build provenance attestation (SLSA provenance v1).
+    default: https://slsa.dev/provenance/v1
+  require-sbom:
+    description: "true: also require an SBOM attestation signed by the same workflow. false: skip it."
+    default: "true"
+  sbom-predicate-type:
+    description: >-
+      Predicate type of the SBOM attestation. actions/attest derives it from the
+      SBOM's spdxVersion; container.yml publishes SPDX 2.3.
+    default: https://spdx.dev/Document/v2.3
+  deny-self-hosted-runners:
+    description: "true: fail attestations generated on self-hosted runners."
+    default: "true"
+  source-ref:
+    description: >-
+      Optional git ref the build must have run on, for example refs/heads/main.
+      Empty = do not check.
+    default: ""
+  signer-digest:
+    description: >-
+      Optional 40-hex commit SHA of the signer workflow. Pins the exact version
+      of container.yml, not just its path. Empty = do not check.
+    default: ""
+  token:
+    description: >-
+      Token used to read attestations from the GitHub API. The default needs
+      `attestations: read` on the job. Pass another token to verify an image
+      built in a different private repository.
+    default: ${{ github.token }}
+outputs:
+  verified:
+    description: "true when every requested attestation verified. The step fails otherwise, and this output stays unset."
+    value: ${{ steps.verify.outputs.verified }}
+runs:
+  using: composite
+  steps:
+    - id: verify
+      shell: bash
+      # Inputs reach the script only through the environment, never `${{ }}`
+      # inside it (zizmor template-injection), and are validated before use.
+      env:
+        IMAGE: ${{ inputs.image }}
+        DIGEST: ${{ inputs.digest }}
+        REPOSITORY: ${{ inputs.repository }}
+        SIGNER_WORKFLOW: ${{ inputs.signer-workflow }}
+        PREDICATE_TYPE: ${{ inputs.predicate-type }}
+        REQUIRE_SBOM: ${{ inputs.require-sbom }}
+        SBOM_PREDICATE_TYPE: ${{ inputs.sbom-predicate-type }}
+        DENY_SELF_HOSTED: ${{ inputs.deny-self-hosted-runners }}
+        SOURCE_REF: ${{ inputs.source-ref }}
+        SIGNER_DIGEST: ${{ inputs.signer-digest }}
+        GH_TOKEN: ${{ inputs.token }}
+      run: |
+        set -euo pipefail
+        # ASCII-only character classes and ranges in the regexes below.
+        export LC_ALL=C
+
+        # Values are echoed into workflow commands: keep only harmless characters
+        # and cap the length so a crafted input cannot inject a command.
+        show() { printf '%s' "${1:0:120}" | tr -c '[:alnum:]:/@._+#%-' '?'; }
+        fail() {
+          echo "::error title=verify-image::$*"
+          exit 1
+        }
+        # Gates fail closed: an empty, malformed or unexpected value is an error.
+        require() { # name value regex hint
+          [[ -n $2 ]] || fail "input '$1' is empty. $4"
+          [[ $2 =~ $3 ]] || fail "input '$1' is not valid: '$(show "$2")'. $4"
+        }
+
+        command -v gh >/dev/null || fail "the GitHub CLI (gh) is not on PATH; use a GitHub-hosted runner or install gh first."
+        [[ -n ${GH_TOKEN:-} ]] || fail "no token: pass input 'token' or run in a job that has github.token."
+
+        if [[ $DIGEST != sha256:* ]]; then
+          fail "digest must be an image digest (sha256:<64 hex>), got '$(show "$DIGEST")'. Tags are mutable and refused."
+        fi
+        require digest "$DIGEST" '^sha256:[0-9a-f]{64}$' "Expected sha256: followed by 64 lowercase hex characters."
+        require image "$IMAGE" '^[a-z0-9]+([._-]+[a-z0-9]+)*(:[0-9]{1,5})?(/[a-z0-9]+([._-]+[a-z0-9]+)*)+$' \
+          "Expected a lowercase registry/name without oci://, tag or @digest, for example ghcr.io/acme/api."
+        require repository "$REPOSITORY" '^[A-Za-z0-9][A-Za-z0-9-]*/\.?[A-Za-z0-9_-][A-Za-z0-9._-]*$' \
+          "Expected owner/name."
+        if [[ $SIGNER_WORKFLOW == *@* ]]; then
+          fail "input 'signer-workflow' must not contain a ref ('@...'); pin the commit with 'signer-digest' instead."
+        fi
+        require signer-workflow "$SIGNER_WORKFLOW" '^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+){3,}\.ya?ml$' \
+          "Expected owner/repo/.github/workflows/name.yml."
+        case "/$SIGNER_WORKFLOW/" in
+          */./* | */../*) fail "input 'signer-workflow' must not contain '.' or '..' path segments." ;;
+        esac
+        require predicate-type "$PREDICATE_TYPE" '^https://[A-Za-z0-9._/+#%-]+$' "Expected a URL such as https://slsa.dev/provenance/v1."
+        require require-sbom "$REQUIRE_SBOM" '^(true|false)$' "Expected exactly true or false."
+        require deny-self-hosted-runners "$DENY_SELF_HOSTED" '^(true|false)$' "Expected exactly true or false."
+        if [[ $REQUIRE_SBOM == true ]]; then
+          require sbom-predicate-type "$SBOM_PREDICATE_TYPE" '^https://[A-Za-z0-9._/+#%-]+$' \
+            "Expected a URL such as https://spdx.dev/Document/v2.3."
+        fi
+        if [[ -n $SOURCE_REF ]]; then
+          require source-ref "$SOURCE_REF" '^refs/(heads|tags)/[A-Za-z0-9._/-]+$' "Expected refs/heads/<branch> or refs/tags/<tag>."
+        fi
+        if [[ -n $SIGNER_DIGEST ]]; then
+          require signer-digest "$SIGNER_DIGEST" '^[0-9a-f]{40}$' "Expected a full 40-character commit SHA."
+        fi
+
+        subject="oci://$IMAGE@$DIGEST"
+        policy=(--repo "$REPOSITORY" --signer-workflow "$SIGNER_WORKFLOW")
+        if [[ $DENY_SELF_HOSTED == true ]]; then
+          policy+=(--deny-self-hosted-runners)
+        fi
+        if [[ -n $SOURCE_REF ]]; then
+          policy+=(--source-ref "$SOURCE_REF")
+        fi
+        if [[ -n $SIGNER_DIGEST ]]; then
+          policy+=(--signer-digest "$SIGNER_DIGEST")
+        fi
+
+        verify() { # label predicate-type
+          echo "::group::Verify $1 attestation ($2)"
+          if ! gh attestation verify "$subject" "${policy[@]}" --predicate-type "$2"; then
+            echo "::endgroup::"
+            fail "no $1 attestation for $(show "$IMAGE")@$(show "$DIGEST") verified (predicate $(show "$2"), repository $(show "$REPOSITORY"), signer $(show "$SIGNER_WORKFLOW")). Do not deploy this image."
+          fi
+          echo "::endgroup::"
+        }
+
+        verify "build provenance" "$PREDICATE_TYPE"
+        what="SLSA build provenance (\`$PREDICATE_TYPE\`)"
+        if [[ $REQUIRE_SBOM == true ]]; then
+          verify "SBOM" "$SBOM_PREDICATE_TYPE"
+          what="$what and SBOM (\`$SBOM_PREDICATE_TYPE\`)"
+        fi
+
+        extra=""
+        if [[ $DENY_SELF_HOSTED == true ]]; then extra="$extra, self-hosted runners denied"; fi
+        if [[ -n $SOURCE_REF ]]; then extra="$extra, ref \`$SOURCE_REF\`"; fi
+        if [[ -n $SIGNER_DIGEST ]]; then extra="$extra, signer commit \`$SIGNER_DIGEST\`"; fi
+        echo "Verified $what for $IMAGE@$DIGEST"
+        {
+          echo "**Image verified:** \`$IMAGE@$DIGEST\` has $what signed by \`$SIGNER_WORKFLOW\` for \`$REPOSITORY\`$extra."
+        } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+
+        # Written last: reached only if every verification above passed.
+        echo "verified=true" >> "$GITHUB_OUTPUT"

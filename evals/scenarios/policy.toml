@@ -1,0 +1,154 @@
+# Policy as code (golden.toml): validation, floors, and who gets to change the bar.
+#
+# `golden policy check` runs first in every pipeline; an `error` there fails the run.
+
+[[scenario]]
+id = "policy/valid-stricter"
+gate = "policy"
+category = "legit"
+why = "Baseline: a stricter policy validates."
+argv = ["policy", "check"]
+expect = "pass"
+[scenario.head]
+"golden.toml" = "[coverage]\ndiff_min = 95\n[mutation]\nmin_score = 85\n"
+
+[[scenario]]
+id = "policy/below-floor"
+gate = "policy"
+category = "gaming"
+why = "Baseline: a value weaker than the platform floor is rejected."
+argv = ["policy", "check"]
+expect = "error"
+[scenario.head]
+"golden.toml" = "[coverage]\ndiff_min = 50\n"
+
+[[scenario]]
+id = "policy/typo-key"
+gate = "policy"
+category = "gaming"
+why = "A misspelt key (diff_minimum) would silently fall back to the default; policy must fail closed."
+argv = ["policy", "check"]
+expect = "error"
+[scenario.head]
+"golden.toml" = "[coverage]\ndiff_minimum = 99\n"
+
+[[scenario]]
+id = "policy/nan-threshold"
+gate = "policy"
+category = "robustness"
+why = "TOML allows nan; nan compares false against every floor and would slip through validation."
+argv = ["policy", "check"]
+expect = "error"
+[scenario.head]
+"golden.toml" = "[mutation]\nmin_score = nan\n"
+
+[[scenario]]
+id = "policy/fractional-repeats"
+gate = "policy"
+category = "robustness"
+why = "flaky.repeats = 4.5 would become `--count=4.5` and break the flake step."
+argv = ["policy", "check"]
+expect = "error"
+[scenario.head]
+"golden.toml" = "[flaky]\nrepeats = 4.5\n"
+
+[[scenario]]
+id = "policy/unreachable-level"
+gate = "policy"
+category = "robustness"
+why = "scorecard.min_level = 5 can never be reached, so every PR would fail forever."
+argv = ["policy", "check"]
+expect = "error"
+[scenario.head]
+"golden.toml" = "[scorecard]\nmin_level = 5\n"
+
+[[scenario]]
+id = "policy/section-not-a-table"
+gate = "policy"
+category = "robustness"
+why = "`coverage = 95` instead of a [coverage] table."
+argv = ["policy", "check"]
+expect = "error"
+[scenario.head]
+"golden.toml" = "coverage = 95\n"
+
+[[scenario]]
+id = "policy/waiver-not-a-table"
+gate = "policy"
+category = "robustness"
+why = "`[waivers] mutation = \"later\"` instead of a [waivers.mutation] table."
+argv = ["policy", "check"]
+expect = "error"
+[scenario.head]
+"golden.toml" = "[waivers]\nmutation = \"later\"\n"
+
+[[scenario]]
+id = "policy/pr-loosens-its-own-bar"
+gate = "policy"
+category = "gaming"
+why = "The PR lowers diff_min from 95 to 85 (still above the floor). The PR itself is judged by the merged policy."
+argv = ["policy", "get", "coverage.diff_min"]
+expect = "pass"
+expect_lines = ["95"]
+[scenario.base]
+"golden.toml" = "[coverage]\ndiff_min = 95\n"
+[scenario.head]
+"golden.toml" = "[coverage]\ndiff_min = 85\n"
+
+[[scenario]]
+id = "policy/pr-tightens-immediately"
+gate = "policy"
+category = "legit"
+why = "Tightening is always safe, so it applies to the PR that introduces it."
+argv = ["policy", "get", "coverage.diff_min"]
+expect = "pass"
+expect_lines = ["97"]
+[scenario.base]
+"golden.toml" = "[coverage]\ndiff_min = 95\n"
+[scenario.head]
+"golden.toml" = "[coverage]\ndiff_min = 97\n"
+
+[[scenario]]
+id = "policy/pr-deletes-policy-file"
+gate = "policy"
+category = "gaming"
+why = "Deleting golden.toml falls back to defaults (90), weaker than the merged 95."
+argv = ["policy", "get", "coverage.diff_min"]
+expect = "pass"
+expect_lines = ["95"]
+delete = ["golden.toml"]
+[scenario.base]
+"golden.toml" = "[coverage]\ndiff_min = 95\n"
+
+[[scenario]]
+id = "policy/osv-exception-with-expiry"
+gate = "policy"
+category = "legit"
+why = "An advisory with no fix yet is excepted with a reason and an expiry, like a waiver."
+argv = ["policy", "check"]
+expect = "pass"
+stdout_contains = ["**Vulnerability exceptions**", "GHSA-xxxx"]
+[scenario.head]
+"osv-scanner.toml" = "[[IgnoredVulns]]\nid = \"GHSA-xxxx\"\nreason = \"no upstream fix, PLAT-9\"\nignoreUntil = {in30days}\n"
+
+[[scenario]]
+id = "policy/osv-exception-forever"
+gate = "policy"
+category = "gaming"
+why = "An OSV ignore without ignoreUntil silences an advisory forever: a permanent, unreviewed bypass."
+argv = ["policy", "check"]
+expect = "error"
+stdout_contains = ["ignoreUntil is required"]
+[scenario.head]
+"osv-scanner.toml" = "[[IgnoredVulns]]\nid = \"GHSA-xxxx\"\nreason = \"later\"\n"
+
+[[scenario]]
+id = "policy/osv-exception-too-long"
+gate = "policy"
+category = "gaming"
+why = "An OSV ignore a year out is a waiver past the 90-day limit."
+argv = ["policy", "check"]
+expect = "error"
+stdout_contains = ["at most 90 days ahead"]
+[scenario.head]
+"osv-scanner.toml" = "[[IgnoredVulns]]\nid = \"GHSA-xxxx\"\nreason = \"later\"\nignoreUntil = 2099-01-01\n"

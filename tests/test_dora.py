@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from golden import dora
@@ -65,3 +67,92 @@ def test_rounding_precision():
     assert result.lead_time_hours_p50 == 72.0
     assert result.change_failure_rate == 0.333
     assert result.time_to_restore_hours_p50 == 0.17
+
+
+def line(**fields):
+    base = {
+        "sha": "x",
+        "committed_at": "2026-10-01T08:00:00+00:00",
+        "deployed_at": "2026-10-01T10:00:00+00:00",
+        "failed": False,
+        "restored_at": None,
+    }
+    return json.dumps({**base, **fields})
+
+
+def test_parse_log_skips_blank_lines():
+    records = dora.parse_log(line() + "\n\n" + line(sha="y") + "\n")
+    assert [r["sha"] for r in records] == ["x", "y"]
+
+
+@pytest.mark.parametrize(
+    ("text", "message"),
+    [
+        ("not json", "line 1: not JSON"),
+        ("[1]", "line 1: expected a JSON object"),
+        ('{"committed_at": "2026-10-01T08:00:00+00:00"}', "line 1: missing deployed_at, failed"),
+        (line(committed_at="yesterday"), "line 1: committed_at is not an ISO-8601"),
+        (line(deployed_at=5), "line 1: deployed_at is not an ISO-8601"),
+        (line(committed_at="2026-10-01T08:00:00"), "line 1: committed_at needs a UTC offset"),
+        (line(deployed_at="2026-10-01T07:00:00+00:00"), "deployed_at is before committed_at"),
+        (
+            line(failed=True, restored_at="2026-10-01T09:00:00+00:00"),
+            "restored_at is before deployed_at",
+        ),
+        ("\n" + line() + "\n" + line(failed=None) + "x", "line 3: not JSON"),
+    ],
+)
+def test_parse_log_names_the_bad_line(text, message):
+    with pytest.raises(ValueError, match=message):
+        dora.parse_log(text)
+
+
+def test_parse_log_accepts_equal_and_null_times():
+    text = line(deployed_at="2026-10-01T08:00:00+00:00", failed=True, restored_at=None)
+    assert dora.parse_log(text)[0]["failed"] is True
+    restored = line(failed=True, restored_at="2026-10-01T10:00:00+00:00")
+    assert dora.parse_log(restored)[0]["restored_at"] == "2026-10-01T10:00:00+00:00"
+
+
+def test_rework_rate():
+    records = [{**r, "rework": i == 2} for i, r in enumerate(RECORDS)]
+    assert dora.compute(records).deployment_rework_rate == 0.25
+    assert dora.compute(RECORDS).deployment_rework_rate is None
+    partial = [RECORDS[0], {**RECORDS[1], "rework": 1}, {**RECORDS[2], "rework": 0}]
+    assert dora.compute(partial).deployment_rework_rate == 0.5
+    thirds = [{**r, "rework": i == 0} for i, r in enumerate(RECORDS[:3])]
+    assert dora.compute(thirds).deployment_rework_rate == 0.333
+
+
+# ------------------------------------------------------------- found by tests/test_fuzz.py
+@pytest.mark.parametrize("key", ["committed_at", "deployed_at"])
+def test_a_null_required_time_is_an_error_not_a_key_error(key):
+    # `"committed_at": null` passed the "is it there" check and then raised a KeyError.
+    with pytest.raises(ValueError, match=rf"^line 1: {key} is not an ISO-8601 timestamp") as raised:
+        dora.parse_log(line(**{key: None}))
+    assert type(raised.value) is ValueError
+
+
+def test_a_null_restored_at_is_still_fine():
+    assert dora.parse_log(line(failed=True, restored_at=None))[0]["restored_at"] is None
+
+
+@pytest.mark.parametrize("key", ["failed", "rework"])
+@pytest.mark.parametrize("value", [None, 0, 1, "false", "no", [], {}, 1.0])
+def test_failed_and_rework_are_true_or_false(key, value):
+    # `"failed": null` counted as a success and `"failed": "no"` as a failure.
+    with pytest.raises(ValueError, match=rf"^line 1: {key} must be true or false"):
+        dora.parse_log(line(**{key: value}))
+
+
+@pytest.mark.parametrize("key", ["failed", "rework"])
+def test_failed_and_rework_accept_true_and_false(key):
+    for value in (True, False):
+        assert dora.parse_log(line(**{key: value}))[0][key] is value
+
+
+def test_a_line_nested_too_deeply_is_not_json_not_a_recursion_error():
+    deep = "[" * 100_000 + "]" * 100_000
+    with pytest.raises(ValueError, match=r"^line 2: not JSON") as raised:
+        dora.parse_log(line() + "\n" + '{"sha": ' + deep + "}")
+    assert type(raised.value) is ValueError

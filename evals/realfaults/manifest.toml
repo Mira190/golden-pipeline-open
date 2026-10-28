@@ -1,0 +1,712 @@
+# Real-fault benchmark manifest. See README.md in this directory for the protocol.
+#
+# Candidate lists were taken on 2026-10-22 from the pinned snapshot HEAD of each project:
+#   git log --no-merges -i -E --grep='\b(fix|fixes|fixed|bug|regression)\b' <snapshot>
+# and examined in that order (newest first) until the project's quota of kept bugs was met.
+# Every examined commit is either a [[bug]] or a [[discarded]] entry.
+
+[[project]]
+name = "more-itertools"
+url = "https://github.com/more-itertools/more-itertools"
+python = "3.12"
+snapshot = "4aeb4338ae1407d8da9723e86da99efeb446f719"
+source_paths = [
+  "more_itertools/",
+]
+test_paths = [
+  "tests",
+]
+run_paths = [
+  "tests",
+  "more_itertools",
+]
+pytest_extra = [
+  "--doctest-modules",
+]
+
+[[project]]
+name = "boltons"
+url = "https://github.com/mahmoud/boltons"
+python = "3.12"
+snapshot = "4e5faa3d7e4008d89e0d8bf1ea87b6d9a061a16d"
+source_paths = [
+  "boltons/",
+]
+test_paths = [
+  "tests",
+]
+run_paths = [
+  "boltons",
+  "tests",
+]
+pytest_extra = [
+  "--doctest-modules",
+]
+
+[[project]]
+name = "toolz"
+url = "https://github.com/pytoolz/toolz"
+python = "3.12"
+snapshot = "451af60dec590a6010e2babdbf391ea8f815122f"
+source_paths = [
+  "toolz/",
+]
+test_paths = [
+  "toolz/tests",
+]
+also_copy = [
+  "tlz/",
+]
+run_paths = [
+  "toolz",
+]
+deselect = [
+  "toolz/tests/test_package.py::test_has_version",
+]
+pytest_extra = [
+  "--doctest-modules",
+]
+
+[[project]]
+name = "tabulate"
+url = "https://github.com/astanin/python-tabulate"
+python = "3.12"
+snapshot = "268615a5c27dc40e5c22454c07b44d5c50410da0"
+source_paths = [
+  "tabulate/",
+]
+test_paths = [
+  "test",
+]
+requirements = [
+  "wcwidth",
+]
+also_copy = [
+  "README.md",
+]
+
+[[project]]
+name = "semver"
+url = "https://github.com/python-semver/python-semver"
+python = "3.12"
+snapshot = "9ef41316dbe85f7d0fae6e396c45a1bbf69ebb29"
+source_paths = [
+  "src/",
+]
+test_paths = [
+  "tests",
+]
+requirements = [
+  "pytest-cov",
+]
+also_copy = [
+  ".pytest.ini",
+  "docs/",
+]
+pytest_extra = [
+  "--no-cov",
+]
+mutmut_config = [
+  "process_isolation = forkserver",
+]
+
+[[bug]]
+id = "more-itertools-bucket-falsey-validator"
+project = "more-itertools"
+fix = "67fcf640477c78605580f5ee703a54c73c1e7a8a"
+parent = "1ea82a711c69f590054987b5cb194157f8ce8ac4"
+file = "more_itertools/more.py"
+functions = [
+  "bucket.__init__",
+]
+regression_tests = [
+  "tests/test_more.py::BucketTests::test_falsey_validator_is_honoured",
+]
+issue = "https://github.com/more-itertools/more-itertools/issues/1308"
+summary = "`validator or (lambda x: True)` replaces a valid but falsey validator callable with accept-all"
+skip = "not run in the time budget: a mutmut run takes about 8 minutes on this suite (50 s of tests, run 3 times, plus 30 s of mutant generation); verified: regression test fails on P and passes on F"
+
+[[bug]]
+id = "more-itertools-one-only-falsy-exception"
+project = "more-itertools"
+fix = "def2dabea858b6ecb84ee0c52e6e07929f2c409c"
+parent = "9ed3dbb0ae527230cd156d91d0af305478558fba"
+file = "more_itertools/more.py"
+functions = [
+  "one",
+  "only",
+]
+regression_tests = [
+  "tests/test_more.py::OneTests::test_falsy_custom_exception",
+  "tests/test_more.py::OneTests::test_too_long_does_not_evaluate_repr",
+  "tests/test_more.py::OnlyTests::test_falsy_custom_exception",
+  "tests/test_more.py::OnlyTests::test_too_long_does_not_evaluate_repr",
+]
+summary = "`raise too_long or ValueError(...)` drops a user-supplied exception instance that is falsy"
+skip = "not run in the time budget: a mutmut run takes about 8 minutes on this suite (50 s of tests, run 3 times, plus 30 s of mutant generation); verified: regression test fails on P and passes on F"
+
+[[bug]]
+id = "more-itertools-seekable-peek-maxlen0"
+project = "more-itertools"
+fix = "6b1907de293a655fb77881bf81948f95fd15bd7c"
+parent = "ca711220a6657a22655f6fa497524d006a735c5f"
+file = "more_itertools/more.py"
+functions = [
+  "seekable.peek",
+]
+regression_tests = [
+  "tests/test_more.py::SeekableTest::test_maxlen_zero_bool_does_not_drop_items",
+  "tests/test_more.py::SeekableTest::test_maxlen_zero_peek_does_not_drop_items",
+]
+summary = "seekable(maxlen=0).peek() consumes an item it cannot cache; omission: the fix adds the put-back branch"
+skip = "not run in the time budget: a mutmut run takes about 8 minutes on this suite (50 s of tests, run 3 times, plus 30 s of mutant generation); verified: regression test fails on P and passes on F"
+
+[[bug]]
+id = "boltons-pearson-zero-denominator"
+project = "boltons"
+fix = "73e22c90de25aaae3e6aed57f7438ffe57349339"
+parent = "3913220988e1e7c80620796fdcb4f74eb598d179"
+file = "boltons/statsutils.py"
+functions = [
+  "Stats._calc_pearson_type",
+]
+regression_tests = [
+  "tests/test_statsutils.py::test_pearson_type_zero_denominator",
+]
+issue = "https://github.com/mahmoud/boltons/pull/434"
+summary = "ZeroDivisionError when c0 == 0; omission: the fix adds a guard before the division"
+
+[[bug]]
+id = "boltons-indexedset-update"
+project = "boltons"
+fix = "a180020c760b532e8889f161d97d05647adfee8c"
+parent = "e00c10a809525027b8167fbb7ac233cfc25a01f5"
+file = "boltons/setutils.py"
+functions = [
+  "IndexedSet.update",
+]
+regression_tests = [
+  "tests/test_setutils.py::test_indexed_set_update_multiple_iterables",
+  "tests/test_setutils.py::test_indexed_set_update_multiple_iterables_with_tuple_items",
+]
+issue = "https://github.com/mahmoud/boltons/pull/474"
+summary = "`chain(others)` instead of `chain.from_iterable(others)`: update() with several iterables adds the iterables, not their items"
+
+[[bug]]
+id = "boltons-complementset-issuperset-typo"
+project = "boltons"
+fix = "ec1ff9f6728f5f857402b294c218be731c62af5f"
+parent = "b5c495bec206741ec25cd82ecc869e0b59bb0d10"
+file = "boltons/setutils.py"
+functions = [
+  "_ComplementSet.__le__",
+  "_ComplementSet.__ge__",
+]
+regression_tests = [
+  "tests/test_setutils.py::test_complement_set",
+]
+issue = "https://github.com/mahmoud/boltons/issues/438"
+summary = "`issupserset` typo: AttributeError on the complement-vs-complement branches of <= and >="
+
+[[bug]]
+id = "boltons-bits-length"
+project = "boltons"
+fix = "c1c25da365cf14878cf5317147e7a09b5d124df5"
+parent = "e66cade323f5c11cebb4bd0f099e634b245adccd"
+file = "boltons/mathutils.py"
+functions = [
+  "Bits.__init__",
+]
+regression_tests = [
+  "tests/test_mathutils.py::test_bits_len_bound",
+]
+summary = "off-by-one: `val > 2 ** len_` accepts a value that needs len_ + 1 bits"
+
+[[bug]]
+id = "toolz-interpose-empty"
+project = "toolz"
+fix = "d2eba0374a452c2b18fe188b04527e22bda3548c"
+parent = "55ce42dc3b6f786ed9d4e38633cc5cfe3622a526"
+file = "toolz/itertoolz.py"
+functions = [
+  "interpose",
+]
+regression_tests = [
+  "toolz/tests/test_itertoolz.py::test_interpose_empty",
+]
+issue = "https://github.com/pytoolz/toolz/issues/635"
+summary = "interpose(el, []) raises StopIteration from a bare next(); omission: the fix adds the empty case"
+
+[[bug]]
+id = "toolz-partition-all-bad-len"
+project = "toolz"
+fix = "5a7e078c941c990dcaca53ac6920e5d5c0b1475f"
+parent = "1fb2b9f1b69ab664a264944f4eafc290acce127d"
+file = "toolz/itertoolz.py"
+functions = [
+  "partition_all",
+]
+regression_tests = [
+  "toolz/tests/test_itertoolz.py::test_partition_all",
+]
+issue = "https://github.com/pytoolz/toolz/issues/602"
+summary = "partition_all trusts len(seq) and silently returns wrong chunks when it is wrong; the fix adds a consistency check (input validation)"
+
+[[bug]]
+id = "tabulate-asciidoc-trailing-whitespace"
+project = "tabulate"
+fix = "3aa568c66987dbc97c079c6a2e4bd0ad362a949f"
+parent = "2939dc1d17e13a71c256042d9ad46bfd9d8a07b8"
+file = "tabulate/__init__.py"
+functions = [
+  "_asciidoc_row",
+]
+regression_tests = [
+  "test/test_output.py::test_asciidoc",
+  "test/test_output.py::test_asciidoc_headerless",
+  "test/test_regression.py::test_asciidoc_without_trailing_whitespace",
+]
+issue = "https://github.com/astanin/python-tabulate/issues/408"
+summary = "asciidoc rows end in trailing whitespace; the fix right-strips each returned line"
+
+[[bug]]
+id = "tabulate-wrap-wide-char-hang"
+project = "tabulate"
+fix = "032dc0d107fedd4ce7921c1a494a76a2910f49ff"
+parent = "1818a3b4ce66b69b08e8f76cfd25c32a67dcdd53"
+file = "tabulate/__init__.py"
+functions = [
+  "_CustomTextWrap._handle_long_word",
+]
+regression_tests = [
+  "test/test_textwrapper.py::test_wrap_wide_char_narrower_than_char_width",
+]
+issue = "https://github.com/astanin/python-tabulate/issues/399"
+summary = "infinite loop when a wide character is wider than the column; omission: the fix forces progress with `i = max(i, 2)`"
+
+[[bug]]
+id = "tabulate-empty-table-maxheadercolwidths"
+project = "tabulate"
+fix = "87a9a4e07a5efb39b81fdb6ac513b1d345bb21fb"
+parent = "e13a4d0dd292cade200e653eb9155a1ca0f1dbea"
+file = "tabulate/__init__.py"
+functions = [
+  "tabulate",
+]
+regression_tests = [
+  "test/test_regression.py::test_empty_table_with_maxheadercolwidths",
+]
+issue = "https://github.com/astanin/python-tabulate/issues/365"
+summary = "`len(list_of_lists[0])` raises IndexError for an empty table with maxheadercolwidths"
+skip = "not run in the time budget: the buggy function is the 300-line tabulate() with hundreds of mutants (estimated 20+ minutes); verified: regression test fails on P and passes on F"
+
+[[bug]]
+id = "semver-next-version-legacy-counter"
+project = "semver"
+fix = "9ef41316dbe85f7d0fae6e396c45a1bbf69ebb29"
+parent = "bcd151fa63df3053b9f30e698e9ae1020187be1a"
+file = "src/semver/version.py"
+functions = [
+  "Version.next_version",
+]
+regression_tests = [
+  "tests/test_issue484.py::test_issue_484_rc9_to_rc10",
+  "tests/test_next_version_legacy_order.py::test_next_legacy_counter_preserves_order",
+  "tests/test_next_version_legacy_order.py::test_repeated_legacy_bumps_preserve_order_and_subclass",
+]
+issue = "https://github.com/python-semver/python-semver/issues/500"
+summary = "next_version('prerelease') on rc9 returns rc10 of the same patch, which sorts lower than rc9"
+
+[[bug]]
+id = "semver-next-version-token-switch"
+project = "semver"
+fix = "bcd151fa63df3053b9f30e698e9ae1020187be1a"
+parent = "94debf9d3e714ccb08ca7c0199b5bce96cfd7687"
+file = "src/semver/version.py"
+functions = [
+  "Version.next_version",
+]
+regression_tests = [
+  "tests/test_bump.py::test_next_version_matches_literal_prerelease_token_family",
+  "tests/test_issue484.py::test_token_switch_preserves_version_order",
+]
+issue = "https://github.com/python-semver/python-semver/issues/497"
+summary = "switching to a prerelease token that sorts earlier (rc -> alpha) returns a version lower than the input"
+
+[[discarded]]
+project = "more-itertools"
+commit = "edc63587ed2ec41ecc802d5550524471f48161c0"
+subject = "tests: colocate seekable memory regression with seekable tests"
+reason = "no library source file changed (tests, docs, CI or packaging only)"
+
+[[discarded]]
+project = "more-itertools"
+commit = "fda709afc6f805ffab7f249e9b1179e8f34e4b32"
+subject = "Simplify seekable memory regression measurement"
+reason = "no library source file changed (tests, docs, CI or packaging only)"
+
+[[discarded]]
+project = "more-itertools"
+commit = "262dbb9805710cf31140f7566037e9f6178b6c28"
+subject = "fix: check maxlen with getattr instead of isinstance"
+reason = "no regression test added or changed in the commit"
+
+[[discarded]]
+project = "more-itertools"
+commit = "288d6da0058a3e1e56842bd1ce6f4fc669658aea"
+subject = "Issue #1287: Less aggressive fix for issue #1284"
+reason = "no regression test added or changed in the commit; touches 3 functions in 1 files (limit: two functions)"
+
+[[discarded]]
+project = "more-itertools"
+commit = "d032cab7798c7a072ecbb8ade4dfa50030c75cb5"
+subject = "fix nonpositive item limits in constrained_batches"
+reason = "no regression test added or changed in the commit"
+
+[[discarded]]
+project = "boltons"
+commit = "4e5faa3d7e4008d89e0d8bf1ea87b6d9a061a16d"
+subject = "Fix spooled stream write compatibility and backwards text seeks (#513)"
+reason = "touches three functions (SpooledBytesIO.write, SpooledStringIO.write, SpooledStringIO.seek) in two classes (limit: two functions)"
+
+[[discarded]]
+project = "boltons"
+commit = "e00c10a809525027b8167fbb7ac233cfc25a01f5"
+subject = "setutils, listutils: streamline bulk removal and fix list bounds (#440)"
+reason = "touches 6 functions in 2 files (limit: two functions)"
+
+[[discarded]]
+project = "boltons"
+commit = "efff866a3b66fdafc817894390742e1d8bc025e5"
+subject = "mathutils: preserve empty Bits through conversions (#468)"
+reason = "touches 3 functions in 1 files (limit: two functions)"
+
+[[discarded]]
+project = "boltons"
+commit = "a1ea1030ed85137e999c0bd9b11d16368d3ab241"
+subject = "dictutils: preserve iterator values in addlist (#458)"
+reason = "touches two files (dictutils.addlist and urlutils.addlist)"
+
+[[discarded]]
+project = "boltons"
+commit = "f268ec349d4a4f13e3e8f2dd86db059959514222"
+subject = "Document Unicode line separator fix"
+reason = "no library source file changed (tests, docs, CI or packaging only)"
+
+[[discarded]]
+project = "boltons"
+commit = "d12d86a4706aa4a367a91679b0ff9b6a572e5298"
+subject = "Fix Unicode line separators in iter_splitlines"
+reason = "no regression test added or changed in the commit; change is outside any function body (module level)"
+
+[[discarded]]
+project = "boltons"
+commit = "580a9c2d12755d472e534ca3e277e8f7e3ada49e"
+subject = "setutils: cover _ComplementSet __ge__'s double-complement branch, drop duplicated NotImplemented checks (#446)"
+reason = "clean-up that removes duplicated dead checks and adds coverage; fixes no defect"
+
+[[discarded]]
+project = "boltons"
+commit = "b5c495bec206741ec25cd82ecc869e0b59bb0d10"
+subject = "funcutils: forward target-keyword-only args as keywords in wraps invocations (#445)"
+reason = "feature-sized fix: adds a `target` parameter and changes about 20 code lines (limit: 15)"
+
+[[discarded]]
+project = "toolz"
+commit = "55ce42dc3b6f786ed9d4e38633cc5cfe3622a526"
+subject = "Support Python 3.15 and refresh dev tooling (#636)"
+reason = "no regression test added or changed in the commit; change is outside any function body (module level)"
+
+[[discarded]]
+project = "toolz"
+commit = "1fb2b9f1b69ab664a264944f4eafc290acce127d"
+subject = "Add artifact attestation for build provenance (#609)"
+reason = "no library source file changed (tests, docs, CI or packaging only)"
+
+[[discarded]]
+project = "toolz"
+commit = "688a81257243640db5c4099bdd063f1c31810a72"
+subject = "Test against Python 3.14-dev on CI (#592)"
+reason = "Python 3.14 CI/compatibility change at module level (operator re-exports), not a defect in a function"
+
+[[discarded]]
+project = "toolz"
+commit = "0c2b43a926a3543817240c878c6ded1180c81b71"
+subject = "Test fixes for changes in recent upstream Python (#582)"
+reason = "no library source file changed (tests, docs, CI or packaging only)"
+
+[[discarded]]
+project = "toolz"
+commit = "c4fc6b082630bb97999ac00cdbb44f002569209f"
+subject = "fix doc, add a blank line to show code snippet correctly"
+reason = "no regression test added or changed in the commit; change is outside any function body (module level)"
+
+[[discarded]]
+project = "toolz"
+commit = "5b8516b5ed7c92d2f077d01647c5882929293c8c"
+subject = "docs: fix simple typo, argumemts -> arguments"
+reason = "no regression test added or changed in the commit; change is outside any function body (module level)"
+
+[[discarded]]
+project = "toolz"
+commit = "6a8de2e8f61bc65e71708d5e5a34cc67f235b7e5"
+subject = "Fix Tlz error in Python 3.11 (alpha)"
+reason = "no library source file changed (tests, docs, CI or packaging only)"
+
+[[discarded]]
+project = "toolz"
+commit = "de0a4ac975915ee17d38f7aedabaabbaed81b888"
+subject = "Fix typos"
+reason = "no regression test added or changed in the commit; touches 2 functions in 3 files (limit: two functions)"
+
+[[discarded]]
+project = "toolz"
+commit = "c03c713f6ef693635f3e98226520d9999699fe31"
+subject = "TST: fix py39 deprecation"
+reason = "no library source file changed (tests, docs, CI or packaging only)"
+
+[[discarded]]
+project = "toolz"
+commit = "da81b1e8ab96b22ed81e6414099aba066633f3ff"
+subject = "Support Python 3.10 by adding `anext` signature."
+reason = "no regression test added or changed in the commit; change is outside any function body (module level)"
+
+[[discarded]]
+project = "toolz"
+commit = "3a9b97262c1879ee3a895822f96bf2afcddad5ae"
+subject = "Add apply and compose_left to do/source/api.rst"
+reason = "no library source file changed (tests, docs, CI or packaging only)"
+
+[[discarded]]
+project = "toolz"
+commit = "3eb3e85abf70b9c88a2464e6397c07ad31dafa9a"
+subject = "minor typo fix (#492)"
+reason = "no library source file changed (tests, docs, CI or packaging only)"
+
+[[discarded]]
+project = "toolz"
+commit = "918918a92bc67cb2282d7f83e00811a6f879e322"
+subject = "Fix pragma checks."
+reason = "no regression test added or changed in the commit"
+
+[[discarded]]
+project = "toolz"
+commit = "cbfc621193c709fd1177cc913ae367338be668ef"
+subject = "Fix formatting of deprecation warning."
+reason = "no regression test added or changed in the commit; change is outside any function body (module level)"
+
+[[discarded]]
+project = "toolz"
+commit = "4dea63857cbde7f9601d768324722d764a1b4daf"
+subject = "Fix DeprecationWarning."
+reason = "no library source file changed (tests, docs, CI or packaging only)"
+
+[[discarded]]
+project = "toolz"
+commit = "30b5e8e317ffd3f0de549b18c86f2fb20ac97729"
+subject = "Fix mapping import for Python 3."
+reason = "no library source file changed (tests, docs, CI or packaging only)"
+
+[[discarded]]
+project = "toolz"
+commit = "af561c420aaea843c6213302a60bb58bc09e8c16"
+subject = "Fix simple typo: sequencies -> sequences"
+reason = "no regression test added or changed in the commit"
+
+[[discarded]]
+project = "toolz"
+commit = "baa983b7fdc8d6903eef4b3600a7dde4c48a46e1"
+subject = "Fix Mapping import."
+reason = "no library source file changed (tests, docs, CI or packaging only)"
+
+[[discarded]]
+project = "toolz"
+commit = "c696ac6f3c2962b370fe8dda78c64cf2564e1457"
+subject = "Also fix merge_with"
+reason = "suite does not run on Python >= 3.10, which mutmut 3.8 requires (2019 code: pytest collection fails with SyntaxError)"
+
+[[discarded]]
+project = "toolz"
+commit = "b2df6cd41b6f78dd19eb2fd48e82dae1d307da66"
+subject = "doc: fix typo in parallel map example"
+reason = "no library source file changed (tests, docs, CI or packaging only)"
+
+[[discarded]]
+project = "toolz"
+commit = "9f4ab2fa425809c1071394baccc9f4e4a43cbd36"
+subject = "Fix sandbox tests."
+reason = "no regression test added or changed in the commit; change is outside any function body (module level)"
+
+[[discarded]]
+project = "toolz"
+commit = "22ba48f09317bd5db5ebd186c7bddf27a8e846ca"
+subject = "Fix Python specific tests."
+reason = "no library source file changed (tests, docs, CI or packaging only)"
+
+[[discarded]]
+project = "toolz"
+commit = "80ae19783d10852619d435253cfc2e052be7a73c"
+subject = "Fix missed items call."
+reason = "no regression test added or changed in the commit"
+
+[[discarded]]
+project = "toolz"
+commit = "3118b890c34663dc39fa10dbe02e41f7f758926a"
+subject = "Add regression test from pytoolz/cytoolz#130"
+reason = "no library source file changed (tests, docs, CI or packaging only)"
+
+[[discarded]]
+project = "toolz"
+commit = "dd9b9ad0c56970a162d5d5db4f69ebf3b0a7548f"
+subject = "Revert 899a932, which worked around a bug in pypy3<2.5"
+reason = "no library source file changed (tests, docs, CI or packaging only)"
+
+[[discarded]]
+project = "toolz"
+commit = "1735c7125953ecb4a7b50bde252a04f4b224a8ea"
+subject = "fix codestyle issues"
+reason = "no regression test added or changed in the commit"
+
+[[discarded]]
+project = "toolz"
+commit = "f25bc8efaf4562e5831add5eab94fdd05eaf6213"
+subject = "Update streaming-analytics.rst"
+reason = "no library source file changed (tests, docs, CI or packaging only)"
+
+[[discarded]]
+project = "toolz"
+commit = "41a382baf9b38c15e7fc26c745481dc42e0f352b"
+subject = "fix memory leak"
+reason = "no regression test added or changed in the commit"
+
+[[discarded]]
+project = "toolz"
+commit = "40ac54395cc22e212d95f292ca7005bc266bae09"
+subject = "DOC/BUG: fix import so in memory split-apply-combine example runs"
+reason = "no library source file changed (tests, docs, CI or packaging only)"
+
+[[discarded]]
+project = "toolz"
+commit = "b2eb929e4c88c6876a8510e5229842556a001245"
+subject = "Fix linting error."
+reason = "no regression test added or changed in the commit; change is outside any function body (module level)"
+
+[[discarded]]
+project = "toolz"
+commit = "60192346df93e5efcdbfb53fa287a963f558c3f6"
+subject = "Fix wrong docstring for unzip()"
+reason = "no regression test added or changed in the commit"
+
+[[discarded]]
+project = "toolz"
+commit = "01e4313cb9a272be7a535b98dc7f69f56c3ecdca"
+subject = "Fix DeprecationWarning in Python 3.7"
+reason = "no regression test added or changed in the commit"
+
+[[discarded]]
+project = "toolz"
+commit = "03cf714895ea317b84e888344d784b1fa4e167d1"
+subject = "Fix indentation error."
+reason = "no regression test added or changed in the commit"
+
+[[discarded]]
+project = "toolz"
+commit = "b791293abe5ea29a588b71c8cde289914b120796"
+subject = "Remove broken download badge"
+reason = "no library source file changed (tests, docs, CI or packaging only)"
+
+[[discarded]]
+project = "toolz"
+commit = "a69f8a5c9d80b193fce84f5f126d09f4d3108338"
+subject = "Fix accumulate for Python 3.7"
+reason = "suite does not run green on Python >= 3.10 (2018 code: unrelated failures in test_nth, test_random_sample, test_inspect_args, test_tlz)"
+
+[[discarded]]
+project = "tabulate"
+commit = "c327d6c41981d3668b96caeb4bab10478c263030"
+subject = "implement support of JSONL and CSV input formats in command line utility"
+reason = "no regression test added or changed in the commit"
+
+[[discarded]]
+project = "tabulate"
+commit = "164b36740fccadd5bcccbdedc88e9b109d9a9bdd"
+subject = "fix GH103 and GH103 of sp-repo-review recommendations"
+reason = "no library source file changed (tests, docs, CI or packaging only)"
+
+[[discarded]]
+project = "tabulate"
+commit = "315f6c17252c9e1d2f81a4a4e55e7c68ec55938b"
+subject = "One last fix for flit builds"
+reason = "no regression test added or changed in the commit; change is outside any function body (module level)"
+
+[[discarded]]
+project = "tabulate"
+commit = "4552d6efcd17fd937e64d4851f0ca8cf7a64c7b8"
+subject = "A few fixes for flit builds"
+reason = "no library source file changed (tests, docs, CI or packaging only)"
+
+[[discarded]]
+project = "tabulate"
+commit = "e6a24aa6e00ca8ce9a1987f28c11ca08c6f19383"
+subject = "fix #241 - escape pipe character in github and pipe formats"
+reason = "the fix is a module-level format-table change (GITHUB_ESCAPE_RULES); the edits to _build_simple_row and _build_row are whitespace only"
+
+[[discarded]]
+project = "tabulate"
+commit = "a783de20125f1168e8870d700f24f4bf0249ae4b"
+subject = "add regression test for unescaped pipe character in github output (issue #241)"
+reason = "no library source file changed (tests, docs, CI or packaging only)"
+
+[[discarded]]
+project = "tabulate"
+commit = "8014ec66820c89307005b26f878119baa5bf6932"
+subject = "Fix alignments in `github` tables"
+reason = "change is outside any function body (module level)"
+
+[[discarded]]
+project = "tabulate"
+commit = "0c7d5012ed9c66137d6c0c6c83a552339098e57e"
+subject = "fix examples in README.md to pass doctests"
+reason = "no library source file changed (tests, docs, CI or packaging only)"
+
+[[discarded]]
+project = "tabulate"
+commit = "ab790a6a160889e6505554f9829cbe43efb25a94"
+subject = "Fix colalign in HTML when default is right."
+reason = "no regression test added or changed in the commit"
+
+[[discarded]]
+project = "tabulate"
+commit = "b577975155c3e27bbc3d440794f445e917e479e0"
+subject = "minor change to fix issue preventing passing in an interable for showindex"
+reason = "no regression test added or changed in the commit"
+
+[[discarded]]
+project = "tabulate"
+commit = "5373ebfa9568db65cf6b9a4edfe22662d028ef12"
+subject = "fix #176 - implement Decimal fixed-point support"
+reason = "new feature (Decimal fixed-point support) rather than a defect fix"
+
+[[discarded]]
+project = "tabulate"
+commit = "4a95974490cde56f81f97aa85dc94958ef309c60"
+subject = "check and format everything with ruff"
+reason = "touches 14 functions in 1 files (limit: two functions)"
+
+[[discarded]]
+project = "tabulate"
+commit = "75640e2b5c362016860521840b01caac18b510f6"
+subject = "use ruff instead of black and flake8"
+reason = "no library source file changed (tests, docs, CI or packaging only)"
+
+[[discarded]]
+project = "tabulate"
+commit = "8ca340f59e079e3b513068c76be9654205350542"
+subject = "Fix typo in docs"
+reason = "no regression test added or changed in the commit"
+
+[[discarded]]
+project = "tabulate"
+commit = "197a8036dc01a0645fafa72dcce329d37e9369a4"
+subject = "add regression test for issue #209 - test_mixed_bool_strings_and_numeric_strings"
+reason = "no library source file changed (tests, docs, CI or packaging only)"

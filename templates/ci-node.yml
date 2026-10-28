@@ -4,9 +4,15 @@ name: ci
 
 on:
   pull_request:
+    # labeled/unlabeled: the test-presence opt-out label takes effect at once.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   push:
     branches: [main]
   merge_group:
+  # Daily on the default branch: new advisories, toolchain drift and flaky
+  # tests surface here, not as a surprise on somebody's unrelated PR.
+  schedule:
+    - cron: "23 6 * * *"
 
 permissions: {}
 

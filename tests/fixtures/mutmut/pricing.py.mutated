@@ -1,0 +1,301 @@
+"""Pricing."""
+
+LIMIT = 10
+
+
+from mutmut.mutation.trampoline import wrap_in_trampoline as _mutmut_mutated, MutantDict
+mutants_x_discount__mutmut: MutantDict = {}  # type: ignore
+
+
+@_mutmut_mutated(mutants_x_discount__mutmut)
+def discount(qty):
+    """Bulk discount."""
+    if qty >= 50:
+        return 10
+    return 0
+
+
+def x_discount__mutmut_orig(qty):
+    """Bulk discount."""
+    if qty >= 50:
+        return 10
+    return 0
+
+
+def x_discount__mutmut_1(qty):
+    """Bulk discount."""
+    if qty > 50:
+        return 10
+    return 0
+
+
+def x_discount__mutmut_2(qty):
+    """Bulk discount."""
+    if qty >= 51:
+        return 10
+    return 0
+
+
+def x_discount__mutmut_3(qty):
+    """Bulk discount."""
+    if qty >= 50:
+        return 11
+    return 0
+
+
+def x_discount__mutmut_4(qty):
+    """Bulk discount."""
+    if qty >= 50:
+        return 10
+    return 1
+
+mutants_x_discount__mutmut['_mutmut_orig'] = x_discount__mutmut_orig # type: ignore # mutmut generated
+mutants_x_discount__mutmut['x_discount__mutmut_1'] = x_discount__mutmut_1 # type: ignore # mutmut generated
+mutants_x_discount__mutmut['x_discount__mutmut_2'] = x_discount__mutmut_2 # type: ignore # mutmut generated
+mutants_x_discount__mutmut['x_discount__mutmut_3'] = x_discount__mutmut_3 # type: ignore # mutmut generated
+mutants_x_discount__mutmut['x_discount__mutmut_4'] = x_discount__mutmut_4 # type: ignore # mutmut generated
+mutants_x_total__mutmut: MutantDict = {}  # type: ignore
+
+
+@_mutmut_mutated(mutants_x_total__mutmut)
+def total(a, b):
+    # keep the bigger one
+    if a > b:
+        return a
+    return b
+
+
+def x_total__mutmut_orig(a, b):
+    # keep the bigger one
+    if a > b:
+        return a
+    return b
+
+
+def x_total__mutmut_1(a, b):
+    # keep the bigger one
+    if a >= b:
+        return a
+    return b
+
+mutants_x_total__mutmut['_mutmut_orig'] = x_total__mutmut_orig # type: ignore # mutmut generated
+mutants_x_total__mutmut['x_total__mutmut_1'] = x_total__mutmut_1 # type: ignore # mutmut generated
+mutants_x_scale__mutmut: MutantDict = {}  # type: ignore
+
+
+@_mutmut_mutated(mutants_x_scale__mutmut)
+def scale(value, factor=2):
+    return value * factor
+
+
+def x_scale__mutmut_orig(value, factor=2):
+    return value * factor
+
+
+def x_scale__mutmut_1(value, factor=3):
+    return value * factor
+
+
+def x_scale__mutmut_2(value, factor=2):
+    return value / factor
+
+mutants_x_scale__mutmut['_mutmut_orig'] = x_scale__mutmut_orig # type: ignore # mutmut generated
+mutants_x_scale__mutmut['x_scale__mutmut_1'] = x_scale__mutmut_1 # type: ignore # mutmut generated
+mutants_x_scale__mutmut['x_scale__mutmut_2'] = x_scale__mutmut_2 # type: ignore # mutmut generated
+mutants_x_unused__mutmut: MutantDict = {}  # type: ignore
+
+
+@_mutmut_mutated(mutants_x_unused__mutmut)
+def unused(x):
+    return x + 1
+
+
+def x_unused__mutmut_orig(x):
+    return x + 1
+
+
+def x_unused__mutmut_1(x):
+    return x - 1
+
+
+def x_unused__mutmut_2(x):
+    return x + 2
+
+mutants_x_unused__mutmut['_mutmut_orig'] = x_unused__mutmut_orig # type: ignore # mutmut generated
+mutants_x_unused__mutmut['x_unused__mutmut_1'] = x_unused__mutmut_1 # type: ignore # mutmut generated
+mutants_x_unused__mutmut['x_unused__mutmut_2'] = x_unused__mutmut_2 # type: ignore # mutmut generated
+mutants_xǁCartǁ__init____mutmut: MutantDict = {}  # type: ignore
+mutants_xǁCartǁadd__mutmut: MutantDict = {}  # type: ignore
+mutants_xǁCartǁtax__mutmut: MutantDict = {}  # type: ignore
+
+
+class Cart:
+    @_mutmut_mutated(mutants_xǁCartǁ__init____mutmut)
+    def __init__(self):
+        self.items = []
+    def xǁCartǁ__init____mutmut_orig(self):
+        self.items = []
+    def xǁCartǁ__init____mutmut_1(self):
+        self.items = None
+
+    @_mutmut_mutated(mutants_xǁCartǁadd__mutmut)
+    def add(self, name,
+            price):
+        label = "item:" + name
+        self.items.append(
+            (label,
+             price,
+             1)
+        )
+        return len(self.items)
+
+    def xǁCartǁadd__mutmut_orig(self, name,
+            price):
+        label = "item:" + name
+        self.items.append(
+            (label,
+             price,
+             1)
+        )
+        return len(self.items)
+
+    def xǁCartǁadd__mutmut_1(self, name,
+            price):
+        label = None
+        self.items.append(
+            (label,
+             price,
+             1)
+        )
+        return len(self.items)
+
+    def xǁCartǁadd__mutmut_2(self, name,
+            price):
+        label = "item:" - name
+        self.items.append(
+            (label,
+             price,
+             1)
+        )
+        return len(self.items)
+
+    def xǁCartǁadd__mutmut_3(self, name,
+            price):
+        label = "XXitem:XX" + name
+        self.items.append(
+            (label,
+             price,
+             1)
+        )
+        return len(self.items)
+
+    def xǁCartǁadd__mutmut_4(self, name,
+            price):
+        label = "ITEM:" + name
+        self.items.append(
+            (label,
+             price,
+             1)
+        )
+        return len(self.items)
+
+    def xǁCartǁadd__mutmut_5(self, name,
+            price):
+        label = "item:" + name
+        self.items.append(
+            None
+        )
+        return len(self.items)
+
+    def xǁCartǁadd__mutmut_6(self, name,
+            price):
+        label = "item:" + name
+        self.items.append(
+            (label,
+             price,
+             2)
+        )
+        return len(self.items)
+
+    @staticmethod
+    @_mutmut_mutated(mutants_xǁCartǁtax__mutmut)
+    def tax(x):
+        return x * 2
+
+    @staticmethod
+    def xǁCartǁtax__mutmut_orig(x):
+        return x * 2
+
+    @staticmethod
+    def xǁCartǁtax__mutmut_1(x):
+        return x / 2
+
+    @staticmethod
+    def xǁCartǁtax__mutmut_2(x):
+        return x * 3
+
+mutants_xǁCartǁ__init____mutmut['_mutmut_orig'] = Cart.xǁCartǁ__init____mutmut_orig # type: ignore # mutmut generated
+mutants_xǁCartǁ__init____mutmut['xǁCartǁ__init____mutmut_1'] = Cart.xǁCartǁ__init____mutmut_1 # type: ignore # mutmut generated
+
+mutants_xǁCartǁadd__mutmut['_mutmut_orig'] = Cart.xǁCartǁadd__mutmut_orig # type: ignore # mutmut generated
+mutants_xǁCartǁadd__mutmut['xǁCartǁadd__mutmut_1'] = Cart.xǁCartǁadd__mutmut_1 # type: ignore # mutmut generated
+mutants_xǁCartǁadd__mutmut['xǁCartǁadd__mutmut_2'] = Cart.xǁCartǁadd__mutmut_2 # type: ignore # mutmut generated
+mutants_xǁCartǁadd__mutmut['xǁCartǁadd__mutmut_3'] = Cart.xǁCartǁadd__mutmut_3 # type: ignore # mutmut generated
+mutants_xǁCartǁadd__mutmut['xǁCartǁadd__mutmut_4'] = Cart.xǁCartǁadd__mutmut_4 # type: ignore # mutmut generated
+mutants_xǁCartǁadd__mutmut['xǁCartǁadd__mutmut_5'] = Cart.xǁCartǁadd__mutmut_5 # type: ignore # mutmut generated
+mutants_xǁCartǁadd__mutmut['xǁCartǁadd__mutmut_6'] = Cart.xǁCartǁadd__mutmut_6 # type: ignore # mutmut generated
+
+mutants_xǁCartǁtax__mutmut['_mutmut_orig'] = Cart.xǁCartǁtax__mutmut_orig # type: ignore # mutmut generated
+mutants_xǁCartǁtax__mutmut['xǁCartǁtax__mutmut_1'] = Cart.xǁCartǁtax__mutmut_1 # type: ignore # mutmut generated
+mutants_xǁCartǁtax__mutmut['xǁCartǁtax__mutmut_2'] = Cart.xǁCartǁtax__mutmut_2 # type: ignore # mutmut generated
+mutants_x_fetch__mutmut: MutantDict = {}  # type: ignore
+
+
+@_mutmut_mutated(mutants_x_fetch__mutmut)
+async def fetch(n):
+    def inner(k):
+        return k + 1
+    return inner(n) + 1
+
+
+async def x_fetch__mutmut_orig(n):
+    def inner(k):
+        return k + 1
+    return inner(n) + 1
+
+
+async def x_fetch__mutmut_1(n):
+    def inner(k):
+        return k - 1
+    return inner(n) + 1
+
+
+async def x_fetch__mutmut_2(n):
+    def inner(k):
+        return k + 2
+    return inner(n) + 1
+
+
+async def x_fetch__mutmut_3(n):
+    def inner(k):
+        return k + 1
+    return inner(n) - 1
+
+
+async def x_fetch__mutmut_4(n):
+    def inner(k):
+        return k + 1
+    return inner(None) + 1
+
+
+async def x_fetch__mutmut_5(n):
+    def inner(k):
+        return k + 1
+    return inner(n) + 2
+
+mutants_x_fetch__mutmut['_mutmut_orig'] = x_fetch__mutmut_orig # type: ignore # mutmut generated
+mutants_x_fetch__mutmut['x_fetch__mutmut_1'] = x_fetch__mutmut_1 # type: ignore # mutmut generated
+mutants_x_fetch__mutmut['x_fetch__mutmut_2'] = x_fetch__mutmut_2 # type: ignore # mutmut generated
+mutants_x_fetch__mutmut['x_fetch__mutmut_3'] = x_fetch__mutmut_3 # type: ignore # mutmut generated
+mutants_x_fetch__mutmut['x_fetch__mutmut_4'] = x_fetch__mutmut_4 # type: ignore # mutmut generated
+mutants_x_fetch__mutmut['x_fetch__mutmut_5'] = x_fetch__mutmut_5 # type: ignore # mutmut generated
