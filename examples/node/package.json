@@ -14,11 +14,11 @@
     "mutate": "stryker run"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.15",
+    "@biomejs/biome": "2.6.2",
     "@stryker-mutator/core": "10.0.0",
     "@stryker-mutator/vitest-runner": "10.0.0",
-    "@vitest/coverage-v8": "4.1.11",
-    "typescript": "6.0.3",
-    "vitest": "4.1.11"
+    "@vitest/coverage-v8": "5.0.5",
+    "typescript": "7.0.2",
+    "vitest": "5.0.5"
   }
 }
