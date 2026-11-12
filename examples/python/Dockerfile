@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # Base image pinned by digest; Dependabot (docker ecosystem) proposes updates.
-FROM python:3.13-slim-bookworm@sha256:73aa5faee130c60da030e105ec971ccf57473fbd22ce73bd6fc9ba99a40b838d
+FROM python:3.15-slim-bookworm@sha256:96599df822d0e1c6bb700014a05c7f3c8cabc6e0f7ff3c4f9f69cee033b4b5d9
 RUN useradd --system --uid 10001 app
 WORKDIR /app
 COPY src/pricing ./pricing
